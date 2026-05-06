@@ -10,13 +10,21 @@ This project is for private code reading and architecture practice. It does not 
 cargo run
 ```
 
-Press `Space` to advance one work round. In some terminals, stdin may require pressing `Space` then `Enter`; piped spaces also work for quick checks.
+The app opens a Bevy debug UI. Press `Space` to advance one work round, or `Esc` to quit.
 
 ## Test
 
 ```bash
 cargo test
 ```
+
+## Architecture
+
+The project is split into a UI-independent battle core and a Bevy debug UI:
+
+- `core`: pure Rust combat state, rules, targeting, effects, logs, and round outcomes.
+- `content`: hard-coded learning content expressed as pure data.
+- `ui`: Bevy adapter that renders the current core state and advances rounds from keyboard input.
 
 ## Current Gameplay Flow
 
@@ -44,21 +52,20 @@ src/
   main.rs
   lib.rs
   app_state.rs
-  combat/
+  core/
     mod.rs
-    component.rs
-    resource.rs
-    event.rs
-    system.rs
     data.rs
+    event.rs
     resolver.rs
-    target.rs
+    model.rs
     formula.rs
     log.rs
   content/
     mod.rs
     chimeras.rs
     stages.rs
+  ui/
+    mod.rs
   tests/
     mod.rs
     combat_tests.rs
@@ -70,6 +77,6 @@ src/
 - Add more chimeras and traits from the original gameplay structure.
 - Add Overtime Mode for high-score attempts.
 - Add a team ranking system.
-- Add a simple Bevy UI.
+- Add richer Bevy UI panels, animation, and replay controls.
 - Add a work replay system.
-- Split the combat core into an independent crate for easier unit testing.
+- Split `core` into an independent crate if the UI grows large enough to justify a workspace.

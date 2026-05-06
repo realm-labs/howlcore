@@ -1,6 +1,6 @@
 //! Data definitions for triggers, selectors, effects, and trait records.
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TraitId(pub &'static str);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
