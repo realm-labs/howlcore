@@ -7,11 +7,11 @@ pub mod ui;
 
 use bevy::prelude::*;
 
-use content::stages::test_stage;
+use content::{battles::test_battle, stages::test_stage};
 
 /// Builds the Bevy debug UI app.
 pub fn build_app() -> App {
-    ui::build_app(test_stage())
+    ui::build_app(test_stage(), test_battle())
 }
 
 #[cfg(test)]

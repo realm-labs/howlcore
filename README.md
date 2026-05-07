@@ -10,7 +10,7 @@ This project is for private code reading and architecture practice. It does not 
 cargo run
 ```
 
-The app currently opens the Work Assignment debug UI. Press `Space` to advance one work round, or `Esc` to quit.
+The app opens a Bevy debug UI. Press `Tab` to switch between Work Assignment and Chimera Battle, `Space` to advance the active mode, or `Esc` to quit.
 
 ## Test
 
@@ -25,7 +25,7 @@ The project is split into two UI-independent gameplay cores plus a Bevy debug UI
 - `core::work`: single-team Work Assignment mode from The Awooo Firm style prototype.
 - `core::battle`: two-team Chimera Battle mode from the Chrysos Awoo Championship style prototype.
 - `content`: hard-coded learning content expressed as pure data.
-- `ui`: Bevy adapter. It currently renders `core::work`; `core::battle` is implemented and tested at the core layer.
+- `ui`: Bevy adapter that can render and advance either `core::work` or `core::battle`.
 
 The two modes intentionally use separate models. Work mode has `efficiency`, `stamina`, tasks, and cookie scoring. Battle mode has `attack`, `hp`, two teams, front-line targeting, and knockout/winner resolution.
 

@@ -1,14 +1,29 @@
-//! Bevy UI adapter for the pure work-battle core.
+//! Bevy UI adapter for the pure gameplay cores.
 
 use bevy::{app::AppExit, prelude::*};
 
-use crate::core::work::{CombatState, StageDefinition};
+use crate::{
+    app_state::AppMode,
+    core::{
+        battle::{BattleDefinition, BattleState, TeamSide, resolver::front_chimera_id},
+        work::{CombatState, StageDefinition},
+    },
+};
 
 #[derive(Resource)]
-struct CombatResource(CombatState);
+struct GameplayResource {
+    mode: AppMode,
+    work: CombatState,
+    battle: BattleState,
+}
 
 #[derive(Resource, Default)]
-struct UiLogs(Vec<String>);
+struct UiLogs {
+    work: Vec<String>,
+    battle: Vec<String>,
+    work_offset: usize,
+    battle_offset: usize,
+}
 
 #[derive(Component)]
 struct RoundText;
@@ -25,21 +40,33 @@ struct TaskText;
 #[derive(Component)]
 struct LogText;
 
-pub fn build_app(stage: StageDefinition) -> App {
-    let initial_logs = stage.initial_logs.clone();
-    let combat = CombatState::from_stage(stage);
+const LOG_WINDOW_LINES: usize = 18;
+
+pub fn build_app(stage: StageDefinition, battle: BattleDefinition) -> App {
+    let work_logs = stage.initial_logs.clone();
+    let battle_logs = battle.initial_logs.clone();
+    let gameplay = GameplayResource {
+        mode: AppMode::WorkAssignment,
+        work: CombatState::from_stage(stage),
+        battle: BattleState::from_definition(battle),
+    };
     let mut app = App::new();
 
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
         primary_window: Some(Window {
-            title: "Howlcore Combat Debugger".to_string(),
+            title: "Howlcore Gameplay Debugger".to_string(),
             resolution: (1180.0, 760.0).into(),
             ..default()
         }),
         ..default()
     }))
-    .insert_resource(CombatResource(combat))
-    .insert_resource(UiLogs(initial_logs))
+    .insert_resource(gameplay)
+    .insert_resource(UiLogs {
+        work: work_logs,
+        battle: battle_logs,
+        work_offset: 0,
+        battle_offset: 0,
+    })
     .add_systems(Startup, setup_ui_system)
     .add_systems(
         Update,
@@ -108,11 +135,11 @@ fn setup_ui_system(mut commands: Commands) {
             })
             .with_children(|columns| {
                 spawn_panel(columns, "Chimeras", 0.92, 0.86, 0.68, ChimeraText);
-                spawn_panel(columns, "Tasks", 0.72, 0.9, 0.76, TaskText);
+                spawn_panel(columns, "Details", 0.72, 0.9, 0.76, TaskText);
                 spawn_panel(columns, "Log", 0.9, 0.82, 0.72, LogText);
             });
             root.spawn(TextBundle::from_section(
-                "Space: next round    Esc: quit",
+                "Tab: switch mode    Space: advance    Up/Down/Page: scroll log    End: latest    Esc: quit",
                 TextStyle {
                     font_size: 16.0,
                     color: Color::srgb(0.58, 0.62, 0.66),
@@ -172,7 +199,7 @@ fn spawn_panel<T: Component>(
 
 fn handle_input_system(
     keys: Res<ButtonInput<KeyCode>>,
-    mut combat: ResMut<CombatResource>,
+    mut gameplay: ResMut<GameplayResource>,
     mut logs: ResMut<UiLogs>,
     mut exit: EventWriter<AppExit>,
 ) {
@@ -180,63 +207,89 @@ fn handle_input_system(
         exit.send(AppExit::Success);
     }
 
+    if keys.just_pressed(KeyCode::Tab) {
+        gameplay.mode = match gameplay.mode {
+            AppMode::WorkAssignment => AppMode::ChimeraBattle,
+            AppMode::ChimeraBattle => AppMode::WorkAssignment,
+        };
+    }
+
     if keys.just_pressed(KeyCode::Space) {
-        let outcome = combat.0.step_round();
-        logs.0.extend(outcome.logs);
+        match gameplay.mode {
+            AppMode::WorkAssignment => {
+                let outcome = gameplay.work.step_round();
+                let was_following = logs.work_offset == 0;
+                logs.work.extend(outcome.logs);
+                if was_following {
+                    logs.work_offset = 0;
+                }
+            }
+            AppMode::ChimeraBattle => {
+                let outcome = gameplay.battle.step_turn();
+                let was_following = logs.battle_offset == 0;
+                logs.battle.extend(outcome.logs);
+                if was_following {
+                    logs.battle_offset = 0;
+                }
+            }
+        }
+    }
+
+    let scroll_delta = log_scroll_delta(&keys);
+    if scroll_delta != 0 {
+        scroll_active_log(&gameplay, &mut logs, scroll_delta);
+    }
+
+    if keys.just_pressed(KeyCode::End) {
+        match gameplay.mode {
+            AppMode::WorkAssignment => logs.work_offset = 0,
+            AppMode::ChimeraBattle => logs.battle_offset = 0,
+        }
     }
 }
 
 fn update_round_text_system(
-    combat: Res<CombatResource>,
+    gameplay: Res<GameplayResource>,
     mut round_text: Query<&mut Text, With<RoundText>>,
 ) {
-    let state = &combat.0;
-    set_text(
-        &mut round_text,
-        format!(
-            "Round {}/{}{}",
-            state.round,
-            state.max_round,
-            if state.is_finished { " - Finished" } else { "" }
-        ),
-    );
+    set_text(&mut round_text, format_header(&gameplay));
 }
 
 fn update_score_text_system(
-    combat: Res<CombatResource>,
+    gameplay: Res<GameplayResource>,
     mut score_text: Query<&mut Text, With<ScoreText>>,
 ) {
-    let state = &combat.0;
-    set_text(
-        &mut score_text,
-        format!(
-            "Awoo Cookies: {} / {}    Completed Tasks: {} / {}",
-            state.cookie_score,
-            state.target_cookie_score,
-            state.completed_tasks,
-            state.tasks.len()
-        ),
-    );
+    set_text(&mut score_text, format_score_line(&gameplay));
 }
 
 fn update_chimera_text_system(
-    combat: Res<CombatResource>,
+    gameplay: Res<GameplayResource>,
     mut chimera_text: Query<&mut Text, With<ChimeraText>>,
 ) {
-    let state = &combat.0;
-    set_text(&mut chimera_text, format_chimeras(state));
+    set_text(&mut chimera_text, format_chimeras(&gameplay));
 }
 
 fn update_task_text_system(
-    combat: Res<CombatResource>,
+    gameplay: Res<GameplayResource>,
     mut task_text: Query<&mut Text, With<TaskText>>,
 ) {
-    let state = &combat.0;
-    set_text(&mut task_text, format_tasks(state));
+    set_text(&mut task_text, format_details(&gameplay));
 }
 
-fn update_log_text_system(logs: Res<UiLogs>, mut log_text: Query<&mut Text, With<LogText>>) {
-    set_text(&mut log_text, format_logs(&logs.0));
+fn update_log_text_system(
+    gameplay: Res<GameplayResource>,
+    logs: Res<UiLogs>,
+    mut log_text: Query<&mut Text, With<LogText>>,
+) {
+    let active_logs = match gameplay.mode {
+        AppMode::WorkAssignment => &logs.work,
+        AppMode::ChimeraBattle => &logs.battle,
+    };
+    let offset = match gameplay.mode {
+        AppMode::WorkAssignment => logs.work_offset,
+        AppMode::ChimeraBattle => logs.battle_offset,
+    };
+    set_text(&mut log_text, format_logs(active_logs, offset));
 }
 
 fn set_text<T: Component>(query: &mut Query<&mut Text, With<T>>, value: String) {
@@ -245,7 +298,119 @@ fn set_text<T: Component>(query: &mut Query<&mut Text, With<T>>, value: String) 
     }
 }
 
-fn format_chimeras(state: &CombatState) -> String {
+fn log_scroll_delta(keys: &ButtonInput<KeyCode>) -> isize {
+    let mut delta = 0;
+    if keys.just_pressed(KeyCode::ArrowUp) {
+        delta += 1;
+    }
+    if keys.just_pressed(KeyCode::ArrowDown) {
+        delta -= 1;
+    }
+    if keys.just_pressed(KeyCode::PageUp) {
+        delta += LOG_WINDOW_LINES as isize;
+    }
+    if keys.just_pressed(KeyCode::PageDown) {
+        delta -= LOG_WINDOW_LINES as isize;
+    }
+    delta
+}
+
+fn scroll_active_log(gameplay: &GameplayResource, logs: &mut UiLogs, delta: isize) {
+    let (entries, offset) = match gameplay.mode {
+        AppMode::WorkAssignment => (&logs.work, &mut logs.work_offset),
+        AppMode::ChimeraBattle => (&logs.battle, &mut logs.battle_offset),
+    };
+    let max_offset = entries.len().saturating_sub(LOG_WINDOW_LINES);
+
+    if delta.is_positive() {
+        *offset = (*offset + delta as usize).min(max_offset);
+    } else {
+        *offset = offset.saturating_sub(delta.unsigned_abs());
+    }
+}
+
+fn format_header(gameplay: &GameplayResource) -> String {
+    match gameplay.mode {
+        AppMode::WorkAssignment => {
+            let state = &gameplay.work;
+            format!(
+                "Work Assignment - Round {}/{}{}",
+                state.round,
+                state.max_round,
+                if state.is_finished { " - Finished" } else { "" }
+            )
+        }
+        AppMode::ChimeraBattle => {
+            let state = &gameplay.battle;
+            format!(
+                "Chimera Battle - Turn {}/{}{}",
+                state.turn,
+                state.max_turn,
+                if state.is_finished { " - Finished" } else { "" }
+            )
+        }
+    }
+}
+
+fn format_score_line(gameplay: &GameplayResource) -> String {
+    match gameplay.mode {
+        AppMode::WorkAssignment => {
+            let state = &gameplay.work;
+            format!(
+                "Awoo Cookies: {} / {}    Completed Tasks: {} / {}",
+                state.cookie_score,
+                state.target_cookie_score,
+                state.completed_tasks,
+                state.tasks.len()
+            )
+        }
+        AppMode::ChimeraBattle => {
+            let state = &gameplay.battle;
+            let challenger_alive = state
+                .challenger
+                .chimeras
+                .iter()
+                .filter(|chimera| chimera.is_alive())
+                .count();
+            let defender_alive = state
+                .defender
+                .chimeras
+                .iter()
+                .filter(|chimera| chimera.is_alive())
+                .count();
+            let winner = state
+                .winner
+                .map(|side| format!("    Winner: {}", side_label(side)))
+                .unwrap_or_default();
+            format!(
+                "{}: {}/{} alive    {}: {}/{} alive{}",
+                state.challenger.name,
+                challenger_alive,
+                state.challenger.chimeras.len(),
+                state.defender.name,
+                defender_alive,
+                state.defender.chimeras.len(),
+                winner
+            )
+        }
+    }
+}
+
+fn format_chimeras(gameplay: &GameplayResource) -> String {
+    match gameplay.mode {
+        AppMode::WorkAssignment => format_work_chimeras(&gameplay.work),
+        AppMode::ChimeraBattle => format_battle_chimeras(&gameplay.battle),
+    }
+}
+
+fn format_details(gameplay: &GameplayResource) -> String {
+    match gameplay.mode {
+        AppMode::WorkAssignment => format_tasks(&gameplay.work),
+        AppMode::ChimeraBattle => format_battle_details(&gameplay.battle),
+    }
+}
+
+fn format_work_chimeras(state: &CombatState) -> String {
     let mut chimeras = state.chimeras.iter().collect::<Vec<_>>();
     chimeras.sort_by_key(|chimera| chimera.slot);
 
@@ -264,6 +429,35 @@ fn format_chimeras(state: &CombatState) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn format_battle_chimeras(state: &BattleState) -> String {
+    [TeamSide::Challenger, TeamSide::Defender]
+        .into_iter()
+        .map(|side| {
+            let team = state.team(side);
+            let mut chimeras = team.chimeras.iter().collect::<Vec<_>>();
+            chimeras.sort_by_key(|chimera| chimera.slot);
+            let entries = chimeras
+                .into_iter()
+                .map(|chimera| {
+                    let status = if chimera.is_alive() { "alive" } else { "down" };
+                    format!(
+                        "  {}  slot {} ({status})\n    HP {}/{}  ATK {}  Lv{}",
+                        chimera.name,
+                        chimera.slot,
+                        chimera.stats.hp,
+                        chimera.stats.max_hp,
+                        chimera.stats.attack,
+                        chimera.level
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!("{} - {}\n{entries}", side_label(side), team.name)
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 fn format_tasks(state: &CombatState) -> String {
@@ -291,12 +485,60 @@ fn format_tasks(state: &CombatState) -> String {
         .join("\n")
 }
 
-fn format_logs(logs: &[String]) -> String {
-    logs.iter()
-        .rev()
-        .take(18)
-        .rev()
-        .cloned()
-        .collect::<Vec<_>>()
-        .join("\n")
+fn format_battle_details(state: &BattleState) -> String {
+    let challenger_front = front_chimera_id(state, TeamSide::Challenger)
+        .and_then(|id| state.chimera(id))
+        .map(|chimera| chimera.name.as_str())
+        .unwrap_or("None");
+    let defender_front = front_chimera_id(state, TeamSide::Defender)
+        .and_then(|id| state.chimera(id))
+        .map(|chimera| chimera.name.as_str())
+        .unwrap_or("None");
+    let challenger_queue = format_summon_queue(state, TeamSide::Challenger);
+    let defender_queue = format_summon_queue(state, TeamSide::Defender);
+
+    format!(
+        "Front Line\n  Challenger: {challenger_front}\n  Defender: {defender_front}\n\nSummon Queue\n  Challenger: {challenger_queue}\n  Defender: {defender_queue}\n\nBattle state uses deterministic RNG for replayable tests."
+    )
+}
+
+fn format_summon_queue(state: &BattleState, side: TeamSide) -> String {
+    let team = state.team(side);
+    if team.summon_queue.is_empty() {
+        "empty".to_string()
+    } else {
+        team.summon_queue
+            .iter()
+            .map(|chimera| chimera.name.clone())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
+fn side_label(side: TeamSide) -> &'static str {
+    match side {
+        TeamSide::Challenger => "Challenger",
+        TeamSide::Defender => "Defender",
+    }
+}
+
+fn format_logs(logs: &[String], offset_from_latest: usize) -> String {
+    if logs.is_empty() {
+        return String::new();
+    }
+
+    let max_offset = logs.len().saturating_sub(LOG_WINDOW_LINES);
+    let offset = offset_from_latest.min(max_offset);
+    let end = logs.len() - offset;
+    let start = end.saturating_sub(LOG_WINDOW_LINES);
+    let mut lines = logs[start..end].to_vec();
+
+    if offset > 0 {
+        lines.push(format!(
+            "[{} newer log line(s) below - End jumps to latest]",
+            offset
+        ));
+    }
+
+    lines.join("\n")
 }
