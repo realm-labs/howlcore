@@ -1,4 +1,4 @@
-use crate::core::{
+use crate::core::work::{
     ActiveEffects, Chimera, ChimeraId, CombatState, Effect, RoundOutcome, Stats, TargetSelector,
     TaskId, TaskProgress, TraitDatabase, WorkTask,
     resolver::{
@@ -131,7 +131,7 @@ fn add_efficiency_should_expire_after_duration() {
     };
     let mut outcome = RoundOutcome::default();
 
-    crate::core::resolver::apply_effect(
+    crate::core::work::resolver::apply_effect(
         &mut state,
         chimera,
         EffectTarget::Chimera(chimera),

@@ -2,7 +2,7 @@
 
 use bevy::{app::AppExit, prelude::*};
 
-use crate::core::{CombatState, StageDefinition};
+use crate::core::work::{CombatState, StageDefinition};
 
 #[derive(Resource)]
 struct CombatResource(CombatState);

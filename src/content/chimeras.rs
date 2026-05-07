@@ -1,6 +1,6 @@
 //! Test chimera definitions and their data-driven traits.
 
-use crate::core::{
+use crate::core::work::{
     ActiveEffects, Chimera, Effect, Stats, TargetSelector, TraitDatabase, TraitDef, TraitId,
     Trigger,
 };

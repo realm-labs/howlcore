@@ -2,7 +2,7 @@
 
 use crate::{
     content::chimeras::{test_chimeras, test_trait_database},
-    core::{StageDefinition, TaskProgress, WorkTask},
+    core::work::{StageDefinition, TaskProgress, WorkTask},
 };
 
 /// Creates the test team and Job-Skipping Guard Practice stage.

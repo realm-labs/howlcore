@@ -1,8 +1,8 @@
 # howlcore
 
-`howlcore` is a Rust + Bevy learning prototype for studying the core gameplay structure of the Honkai: Star Rail 3.1 event "嗷呜嗷呜事务所 / The Awooo Firm".
+`howlcore` is a Rust + Bevy learning prototype for studying the chimera gameplay structure used by Honkai: Star Rail event concepts.
 
-This project is for private code reading and architecture practice. It does not include any original game art, audio, animation, UI, story, or asset files. Names such as chimera names, trait names, and mode names are used only as learning identifiers so the code can be compared with the source gameplay concept.
+This project is for private code reading and architecture practice. It does not include any original game art, audio, animation, UI, story, or asset files. Names such as chimera names, trait names, and mode names are used only as learning identifiers so the code can be compared with the source gameplay concepts.
 
 ## Run
 
@@ -10,7 +10,7 @@ This project is for private code reading and architecture practice. It does not 
 cargo run
 ```
 
-The app opens a Bevy debug UI. Press `Space` to advance one work round, or `Esc` to quit.
+The app currently opens the Work Assignment debug UI. Press `Space` to advance one work round, or `Esc` to quit.
 
 ## Test
 
@@ -20,13 +20,16 @@ cargo test
 
 ## Architecture
 
-The project is split into a UI-independent battle core and a Bevy debug UI:
+The project is split into two UI-independent gameplay cores plus a Bevy debug UI:
 
-- `core`: pure Rust combat state, rules, targeting, effects, logs, and round outcomes.
+- `core::work`: single-team Work Assignment mode from The Awooo Firm style prototype.
+- `core::battle`: two-team Chimera Battle mode from the Chrysos Awoo Championship style prototype.
 - `content`: hard-coded learning content expressed as pure data.
-- `ui`: Bevy adapter that renders the current core state and advances rounds from keyboard input.
+- `ui`: Bevy adapter. It currently renders `core::work`; `core::battle` is implemented and tested at the core layer.
 
-## Current Gameplay Flow
+The two modes intentionally use separate models. Work mode has `efficiency`, `stamina`, tasks, and cookie scoring. Battle mode has `attack`, `hp`, two teams, front-line targeting, and knockout/winner resolution.
+
+## Work Assignment Flow
 
 1. The app creates a test team of five chimeras.
 2. The stage creates three work tasks.
@@ -36,14 +39,23 @@ The project is split into a UI-independent battle core and a Bevy debug UI:
 6. Completed tasks grant Awoo Cookies.
 7. The work ends when all tasks are complete or the max round count is reached.
 
-## Concepts
+## Chimera Battle Flow
 
-- **Chimera**: A worker unit with a name, team id, slot, stats, and traits.
-- **Trait**: A data-driven skill-like rule made from `Trigger`, `TargetSelector`, and `Effect`.
-- **WorkTask**: A task with progress, required progress, stamina cost, and cookie reward.
-- **Progress**: The task workload. Chimeras advance it with efficiency.
-- **Stamina**: The resource spent to work on tasks.
-- **Awoo Cookie**: The score rewarded by completed tasks or trait effects.
+1. A battle creates two teams: Challenger and Defender.
+2. Each team has an ordered chimera lineup with `attack`, `hp`, and `slot`.
+3. The living chimera with the lowest slot is that team's front chimera.
+4. Each turn, both front chimeras attack each other in the same exchange.
+5. Damage is applied to both sides, knocked-down chimeras leave the front line, and the next living chimera takes over on the next turn.
+6. The battle ends when one side has no living chimeras, both sides are defeated, or the max turn count is reached.
+
+Battle mode now has its own data-driven ability layer. The first supported trigger/effect slice covers:
+
+- `BeforeDamageTaken`: reduce incoming damage, used by Tough Cookie.
+- `OnAllyAheadDamaged`: react when the ally one slot ahead takes damage, used by Healer.
+- `AfterAttack`: perform follow-up damage, used by Workaholic.
+- Target selectors for self, attack target, damage target, front enemy, living enemies/allies, adjacent allies, and simple ranked enemy targets.
+
+Damage is resolved through a small pipeline: attack request, incoming-damage modifiers, HP application, damage-taken reactions, ally reactions, and knockdown checks.
 
 ## Directory Structure
 
@@ -54,29 +66,32 @@ src/
   app_state.rs
   core/
     mod.rs
-    data.rs
-    event.rs
-    resolver.rs
-    model.rs
-    formula.rs
-    log.rs
+    work/
+      data.rs
+      event.rs
+      formula.rs
+      log.rs
+      model.rs
+      resolver.rs
+    battle/
+      event.rs
+      model.rs
+      resolver.rs
   content/
-    mod.rs
+    battles.rs
     chimeras.rs
     stages.rs
   ui/
     mod.rs
   tests/
-    mod.rs
+    battle_tests.rs
     combat_tests.rs
 ```
 
 ## Expansion Ideas
 
+- Add battle abilities for attack, damage, knockout, summon, and position-swap triggers.
+- Add battle shop, duplicate leveling, equipment, and saved defense lineups.
+- Add a Bevy debug UI switch between Work Assignment and Chimera Battle.
 - Move hard-coded content to RON or TOML files.
-- Add more chimeras and traits from the original gameplay structure.
-- Add Overtime Mode for high-score attempts.
-- Add a team ranking system.
 - Add richer Bevy UI panels, animation, and replay controls.
-- Add a work replay system.
-- Split `core` into an independent crate if the UI grows large enough to justify a workspace.

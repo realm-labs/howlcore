@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use crate::core::{
+use crate::core::work::{
     data::{TraitDef, TraitId},
     event::RoundOutcome,
     resolver,

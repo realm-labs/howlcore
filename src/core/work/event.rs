@@ -1,6 +1,6 @@
 //! Events emitted by the UI-independent work-battle flow.
 
-use crate::core::model::{ChimeraId, TaskId};
+use crate::core::work::model::{ChimeraId, TaskId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CombatEvent {

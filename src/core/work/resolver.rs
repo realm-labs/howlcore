@@ -1,6 +1,6 @@
 //! Pure gameplay resolution helpers.
 
-use crate::core::{
+use crate::core::work::{
     data::{Effect, TargetSelector, TraitDef, TraitId, Trigger},
     event::{CombatEvent, RoundOutcome},
     formula::{base_work_progress, clamp_stamina},
