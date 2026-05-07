@@ -1,7 +1,8 @@
 //! State model for two-team chimera battles.
 
 use crate::core::battle::{
-    data::BattleAbilityDatabase, data::BattleAbilityId, event::BattleOutcome, resolver,
+    data::BattleAbilityDatabase, data::BattleAbilityId, draft::BattleChimeraOffer,
+    event::BattleOutcome, resolver,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -75,7 +76,36 @@ pub struct BattleDefinition {
     pub defender: BattleTeam,
     pub ability_database: BattleAbilityDatabase,
     pub rng_seed: u64,
+    pub leader: Option<BattleLeader>,
+    pub run: BattleRunConfig,
     pub initial_logs: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BattleLeader {
+    pub name: String,
+    pub effects: Vec<BattleLeaderEffect>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BattleLeaderEffect {
+    AddStartingGold { amount: i32 },
+    AddRunHealth { amount: i32 },
+    AddWinGoldReward { amount: i32 },
+    AddTeamStats { attack: i32, hp: i32 },
+    AddShopOfferStats { attack: i32, hp: i32 },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BattleRunConfig {
+    pub starting_gold: i32,
+    pub shop_size: usize,
+    pub active_team_limit: usize,
+    pub health: i32,
+    pub loss_health_damage: i32,
+    pub win_gold_reward: i32,
+    pub defender_rounds: usize,
+    pub shop_pool: Vec<BattleChimeraOffer>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

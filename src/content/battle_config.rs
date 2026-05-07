@@ -4,9 +4,11 @@ use serde::Deserialize;
 use std::collections::HashSet;
 
 use crate::core::battle::{
-    BattleAbilityDatabase, BattleAbilityDef, BattleAbilityId, BattleChimera, BattleDefinition,
-    BattleEffect, BattleRarity, BattleStats, BattleTargetSelector, BattleTeam, BattleTrigger,
-    TeamSide,
+    BATTLE_LOSS_HEALTH_DAMAGE, BATTLE_RUN_HEALTH, BATTLE_RUN_ROUNDS, BATTLE_SHOP_SIZE,
+    BATTLE_STARTING_GOLD, BATTLE_WIN_GOLD_REWARD, BattleAbilityDatabase, BattleAbilityDef,
+    BattleAbilityId, BattleChimera, BattleChimeraOffer, BattleDefinition, BattleEffect,
+    BattleLeader, BattleLeaderEffect, BattleRarity, BattleRunConfig, BattleStats,
+    BattleTargetSelector, BattleTeam, BattleTrigger, DEFAULT_ACTIVE_TEAM_LIMIT, TeamSide,
 };
 
 const ABILITIES_RON: &str = include_str!("../../assets/battle/abilities.ron");
@@ -38,9 +40,49 @@ pub struct BattleConfig {
     pub name: String,
     pub max_turn: u32,
     pub rng_seed: u64,
+    #[serde(default)]
+    pub leader: Option<LeaderConfig>,
+    #[serde(default)]
+    pub run: RunConfig,
     pub challenger: TeamConfig,
     pub defender: TeamConfig,
     pub initial_logs: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LeaderConfig {
+    pub name: String,
+    #[serde(default)]
+    pub effects: Vec<LeaderEffectConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+pub enum LeaderEffectConfig {
+    AddStartingGold { amount: i32 },
+    AddRunHealth { amount: i32 },
+    AddWinGoldReward { amount: i32 },
+    AddTeamStats { attack: i32, hp: i32 },
+    AddShopOfferStats { attack: i32, hp: i32 },
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RunConfig {
+    #[serde(default = "default_starting_gold")]
+    pub starting_gold: i32,
+    #[serde(default = "default_shop_size")]
+    pub shop_size: usize,
+    #[serde(default = "default_active_team_limit")]
+    pub active_team_limit: usize,
+    #[serde(default = "default_run_health")]
+    pub health: i32,
+    #[serde(default = "default_loss_health_damage")]
+    pub loss_health_damage: i32,
+    #[serde(default = "default_win_gold_reward")]
+    pub win_gold_reward: i32,
+    #[serde(default = "default_defender_rounds")]
+    pub defender_rounds: usize,
+    #[serde(default)]
+    pub shop_pool: Vec<ChimeraConfig>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -177,6 +219,12 @@ fn validate_config(
         }
     }
 
+    for offer in &battle.run.shop_pool {
+        for ability in &offer.abilities {
+            validate_ability_ref(ability, &ability_ids)?;
+        }
+    }
+
     Ok(())
 }
 
@@ -220,7 +268,29 @@ fn build_battle_definition(abilities: AbilityFile, battle: BattleConfig) -> Batt
         defender: build_team(TeamSide::Defender, battle.defender),
         ability_database: build_ability_database(abilities),
         rng_seed: battle.rng_seed,
+        leader: battle.leader.map(build_leader),
+        run: build_run_config(battle.run),
         initial_logs: battle.initial_logs,
+    }
+}
+
+fn build_leader(leader: LeaderConfig) -> BattleLeader {
+    BattleLeader {
+        name: leader.name,
+        effects: leader.effects.into_iter().map(Into::into).collect(),
+    }
+}
+
+fn build_run_config(run: RunConfig) -> BattleRunConfig {
+    BattleRunConfig {
+        starting_gold: run.starting_gold,
+        shop_size: run.shop_size,
+        active_team_limit: run.active_team_limit,
+        health: run.health,
+        loss_health_damage: run.loss_health_damage,
+        win_gold_reward: run.win_gold_reward,
+        defender_rounds: run.defender_rounds,
+        shop_pool: run.shop_pool.into_iter().map(build_offer).collect(),
     }
 }
 
@@ -272,6 +342,18 @@ fn build_chimera(slot: u32, chimera: ChimeraConfig) -> BattleChimera {
     }
 }
 
+fn build_offer(chimera: ChimeraConfig) -> BattleChimeraOffer {
+    let mut offer = BattleChimeraOffer::new(
+        chimera.name,
+        chimera.rarity.into(),
+        chimera.attack,
+        chimera.hp,
+        chimera.abilities.into_iter().map(ability_id).collect(),
+    );
+    offer.tags = chimera.tags;
+    offer
+}
+
 impl From<TriggerConfig> for BattleTrigger {
     fn from(value: TriggerConfig) -> Self {
         match value {
@@ -320,6 +402,20 @@ impl From<RarityConfig> for BattleRarity {
     }
 }
 
+impl From<LeaderEffectConfig> for BattleLeaderEffect {
+    fn from(value: LeaderEffectConfig) -> Self {
+        match value {
+            LeaderEffectConfig::AddStartingGold { amount } => Self::AddStartingGold { amount },
+            LeaderEffectConfig::AddRunHealth { amount } => Self::AddRunHealth { amount },
+            LeaderEffectConfig::AddWinGoldReward { amount } => Self::AddWinGoldReward { amount },
+            LeaderEffectConfig::AddTeamStats { attack, hp } => Self::AddTeamStats { attack, hp },
+            LeaderEffectConfig::AddShopOfferStats { attack, hp } => {
+                Self::AddShopOfferStats { attack, hp }
+            }
+        }
+    }
+}
+
 impl From<EffectConfig> for BattleEffect {
     fn from(value: EffectConfig) -> Self {
         match value {
@@ -358,6 +454,49 @@ fn default_level() -> u32 {
 
 fn default_rarity() -> RarityConfig {
     RarityConfig::White
+}
+
+impl Default for RunConfig {
+    fn default() -> Self {
+        Self {
+            starting_gold: default_starting_gold(),
+            shop_size: default_shop_size(),
+            active_team_limit: default_active_team_limit(),
+            health: default_run_health(),
+            loss_health_damage: default_loss_health_damage(),
+            win_gold_reward: default_win_gold_reward(),
+            defender_rounds: default_defender_rounds(),
+            shop_pool: Vec::new(),
+        }
+    }
+}
+
+fn default_starting_gold() -> i32 {
+    BATTLE_STARTING_GOLD
+}
+
+fn default_shop_size() -> usize {
+    BATTLE_SHOP_SIZE
+}
+
+fn default_active_team_limit() -> usize {
+    DEFAULT_ACTIVE_TEAM_LIMIT
+}
+
+fn default_run_health() -> i32 {
+    BATTLE_RUN_HEALTH
+}
+
+fn default_loss_health_damage() -> i32 {
+    BATTLE_LOSS_HEALTH_DAMAGE
+}
+
+fn default_win_gold_reward() -> i32 {
+    BATTLE_WIN_GOLD_REWARD
+}
+
+fn default_defender_rounds() -> usize {
+    BATTLE_RUN_ROUNDS
 }
 
 fn ability_id(value: String) -> BattleAbilityId {

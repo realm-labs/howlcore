@@ -2,6 +2,51 @@
     name: "Chimera Scrimmage",
     max_turn: 20,
     rng_seed: 1,
+    leader: Some((
+        name: "Field Captain",
+        effects: [
+            AddStartingGold(amount: 1),
+            AddRunHealth(amount: 1),
+            AddWinGoldReward(amount: 1),
+            AddTeamStats(attack: 1, hp: 1),
+            AddShopOfferStats(attack: 1, hp: 1),
+        ],
+    )),
+    run: (
+        starting_gold: 6,
+        shop_size: 3,
+        active_team_limit: 4,
+        health: 3,
+        loss_health_damage: 1,
+        win_gold_reward: 3,
+        defender_rounds: 3,
+        shop_pool: [
+            (
+                name: "Workaholic",
+                attack: 5,
+                hp: 5,
+                abilities: ["workaholic"],
+            ),
+            (
+                name: "Tough Cookie",
+                attack: 2,
+                hp: 10,
+                abilities: ["tough_cookie"],
+            ),
+            (
+                name: "Healer",
+                attack: 2,
+                hp: 6,
+                abilities: ["soothing_care"],
+            ),
+            (
+                name: "Little Villain",
+                attack: 1,
+                hp: 2,
+                abilities: ["little_villain"],
+            ),
+        ],
+    ),
     challenger: (
         name: "Challenger",
         chimeras: [

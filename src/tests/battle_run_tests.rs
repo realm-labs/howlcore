@@ -1,0 +1,245 @@
+use crate::core::battle::{
+    BATTLE_LOSS_HEALTH_DAMAGE, BATTLE_RUN_HEALTH, BATTLE_RUN_ROUNDS, BATTLE_SHOP_SIZE,
+    BATTLE_STARTING_GOLD, BATTLE_WIN_GOLD_REWARD, BattleAbilityDatabase, BattleChimera,
+    BattleDefinition, BattleLeader, BattleLeaderEffect, BattleRarity, BattleRunConfig,
+    BattleRunPhase, BattleRunState, BattleRunStep, BattleStats, BattleTeam, TeamSide,
+};
+
+fn chimera(name: &str, slot: u32, attack: i32, hp: i32) -> BattleChimera {
+    BattleChimera {
+        name: name.to_string(),
+        slot,
+        level: 1,
+        experience: 0,
+        rarity: BattleRarity::White,
+        tags: Vec::new(),
+        stats: BattleStats {
+            attack,
+            max_hp: hp,
+            hp,
+        },
+        abilities: Vec::new(),
+    }
+}
+
+fn team(side: TeamSide, name: &str, chimeras: Vec<BattleChimera>) -> BattleTeam {
+    BattleTeam {
+        side,
+        name: name.to_string(),
+        chimeras,
+        summon_queue: Vec::new(),
+    }
+}
+
+fn battle_definition() -> BattleDefinition {
+    BattleDefinition {
+        name: "Run Test".to_string(),
+        max_turn: 10,
+        challenger: team(
+            TeamSide::Challenger,
+            "Challenger",
+            vec![chimera("Winner", 0, 5, 10)],
+        ),
+        defender: team(
+            TeamSide::Defender,
+            "Defender",
+            vec![chimera("Loser", 0, 1, 3)],
+        ),
+        ability_database: BattleAbilityDatabase::default(),
+        rng_seed: 1,
+        leader: None,
+        run: BattleRunConfig::default(),
+        initial_logs: Vec::new(),
+    }
+}
+
+fn losing_battle_definition() -> BattleDefinition {
+    BattleDefinition {
+        name: "Run Test".to_string(),
+        max_turn: 10,
+        challenger: team(
+            TeamSide::Challenger,
+            "Challenger",
+            vec![chimera("Loser", 0, 1, 3)],
+        ),
+        defender: team(
+            TeamSide::Defender,
+            "Defender",
+            vec![chimera("Winner", 0, 5, 10)],
+        ),
+        ability_database: BattleAbilityDatabase::default(),
+        rng_seed: 1,
+        leader: None,
+        run: BattleRunConfig::default(),
+        initial_logs: Vec::new(),
+    }
+}
+
+#[test]
+fn run_should_start_battle_from_draft_phase() {
+    let mut run = BattleRunState::from_definition(battle_definition());
+
+    let (step, outcome) = run.step().unwrap();
+
+    assert_eq!(step, BattleRunStep::StartedBattle);
+    assert_eq!(outcome.logs.len(), 0);
+    assert_eq!(run.phase, BattleRunPhase::Battle);
+    assert!(run.battle.is_some());
+}
+
+#[test]
+fn run_should_create_initial_shop_offers() {
+    let run = BattleRunState::from_definition(battle_definition());
+
+    assert_eq!(run.draft.gold, BATTLE_STARTING_GOLD);
+    assert_eq!(run.draft.shop.len(), BATTLE_SHOP_SIZE);
+    assert_eq!(run.health, BATTLE_RUN_HEALTH);
+    assert_eq!(run.defenders.len(), BATTLE_RUN_ROUNDS);
+}
+
+#[test]
+fn run_should_apply_leader_effects() {
+    let mut definition = battle_definition();
+    definition.leader = Some(BattleLeader {
+        name: "Leader".to_string(),
+        effects: vec![
+            BattleLeaderEffect::AddStartingGold { amount: 2 },
+            BattleLeaderEffect::AddRunHealth { amount: 1 },
+            BattleLeaderEffect::AddWinGoldReward { amount: 2 },
+            BattleLeaderEffect::AddTeamStats { attack: 1, hp: 2 },
+            BattleLeaderEffect::AddShopOfferStats { attack: 1, hp: 1 },
+        ],
+    });
+
+    let run = BattleRunState::from_definition(definition);
+    let first_chimera = &run.draft.team.chimeras[0];
+    let first_offer = &run.draft.shop[0];
+
+    assert_eq!(
+        run.leader.as_ref().map(|leader| leader.name.as_str()),
+        Some("Leader")
+    );
+    assert_eq!(run.draft.gold, BATTLE_STARTING_GOLD + 2);
+    assert_eq!(run.health, BATTLE_RUN_HEALTH + 1);
+    assert_eq!(run.win_gold_reward, BATTLE_WIN_GOLD_REWARD + 2);
+    assert_eq!(first_chimera.stats.attack, 6);
+    assert_eq!(first_chimera.stats.max_hp, 12);
+    assert_eq!(first_chimera.stats.hp, 12);
+    assert_eq!(first_offer.attack, 6);
+    assert_eq!(first_offer.hp, 6);
+}
+
+#[test]
+fn run_should_use_definition_run_config() {
+    let mut definition = battle_definition();
+    definition.run = BattleRunConfig {
+        starting_gold: 12,
+        shop_size: 2,
+        active_team_limit: 3,
+        health: 5,
+        loss_health_damage: 2,
+        win_gold_reward: 4,
+        defender_rounds: 2,
+        shop_pool: BattleRunConfig::default().shop_pool,
+    };
+
+    let run = BattleRunState::from_definition(definition);
+
+    assert_eq!(run.draft.gold, 12);
+    assert_eq!(run.draft.shop.len(), 2);
+    assert_eq!(run.health, 5);
+    assert_eq!(run.draft.active_team_limit, 3);
+    assert_eq!(run.loss_health_damage, 2);
+    assert_eq!(run.win_gold_reward, 4);
+    assert_eq!(run.defenders.len(), 2);
+}
+
+#[test]
+fn run_should_refresh_shop_in_draft_phase() {
+    let mut run = BattleRunState::from_definition(battle_definition());
+    let first_names = run
+        .draft
+        .shop
+        .iter()
+        .map(|offer| offer.name.clone())
+        .collect::<Vec<_>>();
+
+    run.refresh_shop().unwrap();
+    let refreshed_names = run
+        .draft
+        .shop
+        .iter()
+        .map(|offer| offer.name.clone())
+        .collect::<Vec<_>>();
+
+    assert_ne!(first_names, refreshed_names);
+    assert_eq!(refreshed_names.len(), BATTLE_SHOP_SIZE);
+}
+
+#[test]
+fn run_should_reward_win_and_return_to_draft_when_defenders_remain() {
+    let mut run = BattleRunState::from_definition(battle_definition());
+    run.start_battle().unwrap();
+
+    let (step, outcome) = run.step().unwrap();
+
+    assert_eq!(
+        step,
+        BattleRunStep::BattleResolved {
+            winner: Some(TeamSide::Challenger)
+        }
+    );
+    assert!(outcome.logs.iter().any(|line| line.contains("Run reward")));
+    assert_eq!(
+        run.draft.gold,
+        BATTLE_STARTING_GOLD + BATTLE_WIN_GOLD_REWARD
+    );
+    assert_eq!(run.wins, 1);
+    assert_eq!(run.phase, BattleRunPhase::Draft);
+    assert_eq!(run.battle_index, 1);
+    assert!(run.battle.is_none());
+    assert_eq!(run.draft.shop.len(), BATTLE_SHOP_SIZE);
+}
+
+#[test]
+fn run_should_finish_after_final_defender_is_defeated() {
+    let mut run = BattleRunState::from_definition(battle_definition());
+    run.defenders.truncate(1);
+    run.start_battle().unwrap();
+
+    let (_step, _outcome) = run.step().unwrap();
+
+    assert_eq!(run.wins, 1);
+    assert_eq!(run.phase, BattleRunPhase::Complete);
+}
+
+#[test]
+fn run_should_lose_health_after_defeat() {
+    let mut run = BattleRunState::from_definition(losing_battle_definition());
+    run.start_battle().unwrap();
+
+    let (step, outcome) = run.step().unwrap();
+
+    assert_eq!(
+        step,
+        BattleRunStep::BattleResolved {
+            winner: Some(TeamSide::Defender)
+        }
+    );
+    assert!(outcome.logs.iter().any(|line| line.contains("Run damage")));
+    assert_eq!(run.health, BATTLE_RUN_HEALTH - BATTLE_LOSS_HEALTH_DAMAGE);
+    assert_eq!(run.losses, 1);
+    assert_eq!(run.phase, BattleRunPhase::Draft);
+}
+
+#[test]
+fn run_should_complete_when_health_reaches_zero() {
+    let mut run = BattleRunState::from_definition(losing_battle_definition());
+    run.health = BATTLE_LOSS_HEALTH_DAMAGE;
+    run.start_battle().unwrap();
+
+    let (_step, _outcome) = run.step().unwrap();
+
+    assert_eq!(run.health, 0);
+    assert_eq!(run.phase, BattleRunPhase::Complete);
+}

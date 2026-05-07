@@ -14,6 +14,13 @@ fn test_battle_should_load_from_ron_config() {
     assert_eq!(battle.max_turn, 20);
     assert_eq!(battle.challenger.chimeras.len(), 4);
     assert_eq!(battle.defender.chimeras.len(), 4);
+    assert_eq!(
+        battle.leader.as_ref().map(|leader| leader.name.as_str()),
+        Some("Field Captain")
+    );
+    assert_eq!(battle.run.defender_rounds, 3);
+    assert_eq!(battle.run.active_team_limit, 4);
+    assert_eq!(battle.run.shop_pool.len(), 4);
     assert!(
         battle
             .ability_database

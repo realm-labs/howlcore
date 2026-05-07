@@ -5,7 +5,10 @@ use bevy::{app::AppExit, prelude::*};
 use crate::{
     app_state::AppMode,
     core::{
-        battle::{BattleDefinition, BattleState, TeamSide, resolver::front_chimera_id},
+        battle::{
+            BattleDefinition, BattleLeaderEffect, BattleRunPhase, BattleRunState, BattleRunStep,
+            BattleState, PurchaseOutcome, TeamSide, resolver::front_chimera_id,
+        },
         work::{CombatState, StageDefinition},
     },
 };
@@ -13,8 +16,10 @@ use crate::{
 #[derive(Resource)]
 struct GameplayResource {
     mode: AppMode,
+    work_definition: StageDefinition,
+    battle_definition: BattleDefinition,
     work: CombatState,
-    battle: BattleState,
+    battle: BattleRunState,
 }
 
 #[derive(Resource, Default)]
@@ -47,8 +52,10 @@ pub fn build_app(stage: StageDefinition, battle: BattleDefinition) -> App {
     let battle_logs = battle.initial_logs.clone();
     let gameplay = GameplayResource {
         mode: AppMode::WorkAssignment,
-        work: CombatState::from_stage(stage),
-        battle: BattleState::from_definition(battle),
+        work: CombatState::from_stage(stage.clone()),
+        battle: BattleRunState::from_definition(battle.clone()),
+        work_definition: stage,
+        battle_definition: battle,
     };
     let mut app = App::new();
 
@@ -139,7 +146,7 @@ fn setup_ui_system(mut commands: Commands) {
                 spawn_panel(columns, "Log", 0.9, 0.82, 0.72, LogText);
             });
             root.spawn(TextBundle::from_section(
-                "Tab: switch mode    Space: advance    Up/Down/Page: scroll log    End: latest    Esc: quit",
+                "Tab: switch mode    Space: advance/start battle    1-3: buy    R: refresh shop    Q/W/E: swap lineup    B/V: bench/deploy    N: reset    Up/Down/Page: scroll log    End: latest    Esc: quit",
                 TextStyle {
                     font_size: 16.0,
                     color: Color::srgb(0.58, 0.62, 0.66),
@@ -214,6 +221,14 @@ fn handle_input_system(
         };
     }
 
+    if keys.just_pressed(KeyCode::KeyN) {
+        reset_active_mode(&mut gameplay, &mut logs);
+    }
+
+    if gameplay.mode == AppMode::ChimeraBattle {
+        handle_battle_draft_input(&keys, &mut gameplay, &mut logs);
+    }
+
     if keys.just_pressed(KeyCode::Space) {
         match gameplay.mode {
             AppMode::WorkAssignment => {
@@ -225,9 +240,17 @@ fn handle_input_system(
                 }
             }
             AppMode::ChimeraBattle => {
-                let outcome = gameplay.battle.step_turn();
+                let step_result = gameplay.battle.step();
                 let was_following = logs.battle_offset == 0;
-                logs.battle.extend(outcome.logs);
+                match step_result {
+                    Ok((step, outcome)) => {
+                        logs.battle.extend(format_battle_run_step(step));
+                        logs.battle.extend(outcome.logs);
+                    }
+                    Err(error) => {
+                        logs.battle.push(format!("Battle run error: {error:?}."));
+                    }
+                }
                 if was_following {
                     logs.battle_offset = 0;
                 }
@@ -244,6 +267,95 @@ fn handle_input_system(
         match gameplay.mode {
             AppMode::WorkAssignment => logs.work_offset = 0,
             AppMode::ChimeraBattle => logs.battle_offset = 0,
+        }
+    }
+}
+
+fn handle_battle_draft_input(
+    keys: &ButtonInput<KeyCode>,
+    gameplay: &mut GameplayResource,
+    logs: &mut UiLogs,
+) {
+    if gameplay.battle.phase != BattleRunPhase::Draft {
+        return;
+    }
+
+    if keys.just_pressed(KeyCode::KeyR) {
+        match gameplay.battle.refresh_shop() {
+            Ok(()) => logs.battle.push("Draft: refreshed shop.".to_string()),
+            Err(error) => logs.battle.push(format!("Draft refresh error: {error:?}.")),
+        }
+    }
+
+    for (key, index) in [
+        (KeyCode::Digit1, 0),
+        (KeyCode::Digit2, 1),
+        (KeyCode::Digit3, 2),
+    ] {
+        if keys.just_pressed(key) {
+            match gameplay.battle.draft.purchase(index) {
+                Ok(outcome) => logs.battle.push(format_purchase_outcome(outcome)),
+                Err(error) => logs
+                    .battle
+                    .push(format!("Draft purchase error: {error:?}.")),
+            }
+            logs.battle_offset = 0;
+        }
+    }
+
+    for (key, left_position) in [(KeyCode::KeyQ, 0), (KeyCode::KeyW, 1), (KeyCode::KeyE, 2)] {
+        if keys.just_pressed(key) {
+            match gameplay
+                .battle
+                .draft
+                .swap_active_positions(left_position, left_position + 1)
+            {
+                Ok(()) => logs.battle.push(format!(
+                    "Draft: swapped active positions {} and {}.",
+                    left_position + 1,
+                    left_position + 2
+                )),
+                Err(error) => logs.battle.push(format!("Draft swap error: {error:?}.")),
+            }
+            logs.battle_offset = 0;
+        }
+    }
+
+    if keys.just_pressed(KeyCode::KeyB) {
+        let last_position = gameplay.battle.draft.team.chimeras.len().saturating_sub(1);
+        match gameplay.battle.draft.send_active_to_bench(last_position) {
+            Ok(chimera_name) => logs
+                .battle
+                .push(format!("Draft: moved {chimera_name} to bench.")),
+            Err(error) => logs.battle.push(format!("Draft bench error: {error:?}.")),
+        }
+        logs.battle_offset = 0;
+    }
+
+    if keys.just_pressed(KeyCode::KeyV) {
+        match gameplay.battle.draft.deploy_from_bench(0) {
+            Ok(chimera_name) => logs
+                .battle
+                .push(format!("Draft: deployed {chimera_name} from bench.")),
+            Err(error) => logs.battle.push(format!("Draft deploy error: {error:?}.")),
+        }
+        logs.battle_offset = 0;
+    }
+}
+
+fn reset_active_mode(gameplay: &mut GameplayResource, logs: &mut UiLogs) {
+    match gameplay.mode {
+        AppMode::WorkAssignment => {
+            gameplay.work = CombatState::from_stage(gameplay.work_definition.clone());
+            logs.work = gameplay.work_definition.initial_logs.clone();
+            logs.work.push("Work Assignment reset.".to_string());
+            logs.work_offset = 0;
+        }
+        AppMode::ChimeraBattle => {
+            gameplay.battle = BattleRunState::from_definition(gameplay.battle_definition.clone());
+            logs.battle = gameplay.battle_definition.initial_logs.clone();
+            logs.battle.push("Chimera Battle run reset.".to_string());
+            logs.battle_offset = 0;
         }
     }
 }
@@ -329,6 +441,39 @@ fn scroll_active_log(gameplay: &GameplayResource, logs: &mut UiLogs, delta: isiz
     }
 }
 
+fn format_battle_run_step(step: BattleRunStep) -> Vec<String> {
+    match step {
+        BattleRunStep::StartedBattle => vec!["Battle run: started battle.".to_string()],
+        BattleRunStep::AdvancedBattle => Vec::new(),
+        BattleRunStep::BattleResolved { winner } => {
+            let result = winner
+                .map(|side| format!("{} wins", side_label(side)))
+                .unwrap_or_else(|| "draw".to_string());
+            vec![format!("Battle run: resolved battle, {result}.")]
+        }
+    }
+}
+
+fn format_purchase_outcome(outcome: PurchaseOutcome) -> String {
+    match outcome {
+        PurchaseOutcome::Added { chimera_name } => format!("Draft: bought {chimera_name}."),
+        PurchaseOutcome::AddedToBench { chimera_name } => {
+            format!("Draft: bought {chimera_name} to bench.")
+        }
+        PurchaseOutcome::Merged {
+            chimera_name,
+            level_before,
+            level_after,
+        } => {
+            if level_before == level_after {
+                format!("Draft: merged {chimera_name}.")
+            } else {
+                format!("Draft: merged {chimera_name}, level {level_before} -> {level_after}.")
+            }
+        }
+    }
+}
+
 fn format_header(gameplay: &GameplayResource) -> String {
     match gameplay.mode {
         AppMode::WorkAssignment => {
@@ -341,13 +486,23 @@ fn format_header(gameplay: &GameplayResource) -> String {
             )
         }
         AppMode::ChimeraBattle => {
-            let state = &gameplay.battle;
-            format!(
-                "Chimera Battle - Turn {}/{}{}",
-                state.turn,
-                state.max_turn,
-                if state.is_finished { " - Finished" } else { "" }
-            )
+            let run = &gameplay.battle;
+            match (&run.phase, &run.battle) {
+                (BattleRunPhase::Battle, Some(state)) => format!(
+                    "Chimera Battle - Turn {}/{}{}",
+                    state.turn,
+                    state.max_turn,
+                    if state.is_finished { " - Finished" } else { "" }
+                ),
+                (BattleRunPhase::Draft, _) => {
+                    format!(
+                        "Chimera Battle - Draft before battle {}",
+                        run.battle_index + 1
+                    )
+                }
+                (BattleRunPhase::Complete, _) => "Chimera Battle - Run Complete".to_string(),
+                (BattleRunPhase::Battle, None) => "Chimera Battle - Battle".to_string(),
+            }
         }
     }
 }
@@ -365,48 +520,71 @@ fn format_score_line(gameplay: &GameplayResource) -> String {
             )
         }
         AppMode::ChimeraBattle => {
-            let state = &gameplay.battle;
-            let challenger_alive = state
-                .challenger
-                .chimeras
-                .iter()
-                .filter(|chimera| chimera.is_alive())
-                .count();
-            let defender_alive = state
-                .defender
-                .chimeras
-                .iter()
-                .filter(|chimera| chimera.is_alive())
-                .count();
-            let winner = state
-                .winner
-                .map(|side| format!("    Winner: {}", side_label(side)))
-                .unwrap_or_default();
-            format!(
-                "{}: {}/{} alive    {}: {}/{} alive{}",
-                state.challenger.name,
-                challenger_alive,
-                state.challenger.chimeras.len(),
-                state.defender.name,
-                defender_alive,
-                state.defender.chimeras.len(),
-                winner
-            )
+            let run = &gameplay.battle;
+            match &run.battle {
+                Some(state) => format_battle_score(state, run),
+                None => format!(
+                    "Phase: {:?}    Leader: {}    Health: {}/{}    Gold: {}    Wins: {}    Losses: {}    Battle: {}/{}",
+                    run.phase,
+                    leader_name(run),
+                    run.health,
+                    run.max_health,
+                    run.draft.gold,
+                    run.wins,
+                    run.losses,
+                    run.battle_index + usize::from(run.phase != BattleRunPhase::Complete),
+                    run.defenders.len()
+                ),
+            }
         }
     }
+}
+
+fn format_battle_score(state: &BattleState, run: &BattleRunState) -> String {
+    let challenger_alive = state
+        .challenger
+        .chimeras
+        .iter()
+        .filter(|chimera| chimera.is_alive())
+        .count();
+    let defender_alive = state
+        .defender
+        .chimeras
+        .iter()
+        .filter(|chimera| chimera.is_alive())
+        .count();
+    let winner = state
+        .winner
+        .map(|side| format!("    Winner: {}", side_label(side)))
+        .unwrap_or_default();
+    format!(
+        "{}: {}/{} alive    {}: {}/{} alive    Leader: {}    Health: {}/{}    Gold: {}    Wins: {}{}",
+        state.challenger.name,
+        challenger_alive,
+        state.challenger.chimeras.len(),
+        state.defender.name,
+        defender_alive,
+        state.defender.chimeras.len(),
+        leader_name(run),
+        run.health,
+        run.max_health,
+        run.draft.gold,
+        run.wins,
+        winner
+    )
 }
 
 fn format_chimeras(gameplay: &GameplayResource) -> String {
     match gameplay.mode {
         AppMode::WorkAssignment => format_work_chimeras(&gameplay.work),
-        AppMode::ChimeraBattle => format_battle_chimeras(&gameplay.battle),
+        AppMode::ChimeraBattle => format_run_chimeras(&gameplay.battle),
     }
 }
 
 fn format_details(gameplay: &GameplayResource) -> String {
     match gameplay.mode {
         AppMode::WorkAssignment => format_tasks(&gameplay.work),
-        AppMode::ChimeraBattle => format_battle_details(&gameplay.battle),
+        AppMode::ChimeraBattle => format_run_details(&gameplay.battle),
     }
 }
 
@@ -429,6 +607,65 @@ fn format_work_chimeras(state: &CombatState) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn format_run_chimeras(run: &BattleRunState) -> String {
+    match &run.battle {
+        Some(state) => format_battle_chimeras(state),
+        None => format_draft_chimeras(run),
+    }
+}
+
+fn format_draft_chimeras(run: &BattleRunState) -> String {
+    let team = &run.draft.team;
+    let mut chimeras = team.chimeras.iter().collect::<Vec<_>>();
+    chimeras.sort_by_key(|chimera| chimera.slot);
+    let active_entries = chimeras
+        .into_iter()
+        .map(|chimera| {
+            format!(
+                "  {}  slot {}\n    HP {}/{}  ATK {}  Lv{}  XP {}",
+                chimera.name,
+                chimera.slot,
+                chimera.stats.hp,
+                chimera.stats.max_hp,
+                chimera.stats.attack,
+                chimera.level,
+                chimera.experience
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let bench_entries = if run.draft.bench.is_empty() {
+        "  empty".to_string()
+    } else {
+        run.draft
+            .bench
+            .iter()
+            .enumerate()
+            .map(|(index, chimera)| {
+                format!(
+                    "  {}. {}\n    HP {}/{}  ATK {}  Lv{}  XP {}",
+                    index + 1,
+                    chimera.name,
+                    chimera.stats.hp,
+                    chimera.stats.max_hp,
+                    chimera.stats.attack,
+                    chimera.level,
+                    chimera.experience
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    format!(
+        "Draft Team - {} ({}/{})\n{active_entries}\n\nBench\n{bench_entries}",
+        team.name,
+        team.chimeras.len(),
+        run.draft.active_team_limit
+    )
 }
 
 fn format_battle_chimeras(state: &BattleState) -> String {
@@ -500,6 +737,95 @@ fn format_battle_details(state: &BattleState) -> String {
     format!(
         "Front Line\n  Challenger: {challenger_front}\n  Defender: {defender_front}\n\nSummon Queue\n  Challenger: {challenger_queue}\n  Defender: {defender_queue}\n\nBattle state uses deterministic RNG for replayable tests."
     )
+}
+
+fn format_run_details(run: &BattleRunState) -> String {
+    match (&run.phase, &run.battle) {
+        (BattleRunPhase::Battle, Some(state)) => format_battle_details(state),
+        (BattleRunPhase::Draft, _) => {
+            let shop = if run.draft.shop.is_empty() {
+                "empty".to_string()
+            } else {
+                run.draft
+                    .shop
+                    .iter()
+                    .enumerate()
+                    .map(|(index, offer)| {
+                        format!(
+                            "{}. {}  ATK {}  HP {}  {:?}",
+                            index + 1,
+                            offer.name,
+                            offer.attack,
+                            offer.hp,
+                            offer.rarity
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+            let opponent = run
+                .defenders
+                .get(run.battle_index)
+                .map(|team| team.name.as_str())
+                .unwrap_or("None");
+            format!(
+                "Draft\n  Leader: {}\n  Health: {}/{}\n  Gold: {}\n  Active lineup: {}/{}\n  Bench: {}\n  Next opponent: {opponent}\n  Press Space to start battle.\n\nLeader Effects\n{}\n\nShop\n{shop}",
+                leader_name(run),
+                run.health,
+                run.max_health,
+                run.draft.gold,
+                run.draft.team.chimeras.len(),
+                run.draft.active_team_limit,
+                run.draft.bench.len(),
+                format_leader_effects(run)
+            )
+        }
+        (BattleRunPhase::Complete, _) => format!(
+            "Run complete.\nWins: {}\nLosses: {}\nHealth: {}/{}\nGold: {}",
+            run.wins, run.losses, run.health, run.max_health, run.draft.gold
+        ),
+        (BattleRunPhase::Battle, None) => "Battle is preparing.".to_string(),
+    }
+}
+
+fn leader_name(run: &BattleRunState) -> &str {
+    run.leader
+        .as_ref()
+        .map(|leader| leader.name.as_str())
+        .unwrap_or("None")
+}
+
+fn format_leader_effects(run: &BattleRunState) -> String {
+    let Some(leader) = &run.leader else {
+        return "none".to_string();
+    };
+
+    if leader.effects.is_empty() {
+        return "none".to_string();
+    }
+
+    leader
+        .effects
+        .iter()
+        .map(|effect| match effect {
+            BattleLeaderEffect::AddStartingGold { amount } => {
+                format!("  Starting gold {amount:+}")
+            }
+            BattleLeaderEffect::AddRunHealth { amount } => {
+                format!("  Run health {amount:+}")
+            }
+            BattleLeaderEffect::AddWinGoldReward { amount } => {
+                format!("  Win reward {amount:+} gold")
+            }
+            BattleLeaderEffect::AddTeamStats { attack, hp } => {
+                format!("  Team ATK {attack:+}, HP {hp:+}")
+            }
+            BattleLeaderEffect::AddShopOfferStats { attack, hp } => {
+                format!("  Shop offers ATK {attack:+}, HP {hp:+}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn format_summon_queue(state: &BattleState, side: TeamSide) -> String {

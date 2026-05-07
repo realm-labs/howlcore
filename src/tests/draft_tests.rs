@@ -8,6 +8,52 @@ fn offer(name: &str) -> BattleChimeraOffer {
 }
 
 #[test]
+fn purchase_should_add_to_bench_when_active_lineup_is_full() {
+    let mut draft =
+        DraftState::new(9, TeamSide::Challenger, "Draft Team").with_active_team_limit(1);
+    draft.shop.push(offer("Tough Cookie"));
+    draft.shop.push(offer("Healer"));
+
+    draft.purchase(0).unwrap();
+    let outcome = draft.purchase(0).unwrap();
+
+    assert_eq!(
+        outcome,
+        PurchaseOutcome::AddedToBench {
+            chimera_name: "Healer".to_string()
+        }
+    );
+    assert_eq!(draft.team.chimeras.len(), 1);
+    assert_eq!(draft.bench.len(), 1);
+    assert_eq!(draft.bench[0].name, "Healer");
+}
+
+#[test]
+fn duplicate_purchase_should_merge_bench_chimera() {
+    let mut draft =
+        DraftState::new(9, TeamSide::Challenger, "Draft Team").with_active_team_limit(1);
+    draft.shop.push(offer("Tough Cookie"));
+    draft.shop.push(offer("Healer"));
+    draft.shop.push(offer("Healer"));
+
+    draft.purchase(0).unwrap();
+    draft.purchase(0).unwrap();
+    let outcome = draft.purchase(0).unwrap();
+
+    assert_eq!(
+        outcome,
+        PurchaseOutcome::Merged {
+            chimera_name: "Healer".to_string(),
+            level_before: 1,
+            level_after: 1
+        }
+    );
+    assert_eq!(draft.bench[0].stats.attack, 3);
+    assert_eq!(draft.bench[0].stats.max_hp, 4);
+    assert_eq!(draft.bench[0].experience, 1);
+}
+
+#[test]
 fn purchase_should_add_new_chimera_to_next_slot() {
     let mut draft = DraftState::new(6, TeamSide::Challenger, "Draft Team");
     draft.shop.push(offer("Tough Cookie"));
@@ -102,4 +148,63 @@ fn duplicate_experience_should_raise_level_two_and_three() {
     let chimera = &draft.team.chimeras[0];
     assert_eq!(chimera.level, 3);
     assert_eq!(chimera.experience, 0);
+}
+
+#[test]
+fn active_positions_can_be_swapped() {
+    let mut draft = DraftState::new(9, TeamSide::Challenger, "Draft Team");
+    draft.shop.push(offer("Front"));
+    draft.shop.push(offer("Back"));
+
+    draft.purchase(0).unwrap();
+    draft.purchase(0).unwrap();
+    draft.swap_active_positions(0, 1).unwrap();
+
+    let mut chimeras = draft.team.chimeras.iter().collect::<Vec<_>>();
+    chimeras.sort_by_key(|chimera| chimera.slot);
+    assert_eq!(chimeras[0].name, "Back");
+    assert_eq!(chimeras[1].name, "Front");
+}
+
+#[test]
+fn active_chimera_can_be_sent_to_bench_and_deployed_back() {
+    let mut draft =
+        DraftState::new(9, TeamSide::Challenger, "Draft Team").with_active_team_limit(2);
+    draft.shop.push(offer("Front"));
+    draft.shop.push(offer("Back"));
+
+    draft.purchase(0).unwrap();
+    draft.purchase(0).unwrap();
+    let benched = draft.send_active_to_bench(0).unwrap();
+    let deployed = draft.deploy_from_bench(0).unwrap();
+
+    assert_eq!(benched, "Front");
+    assert_eq!(deployed, "Front");
+    assert!(draft.bench.is_empty());
+    assert_eq!(draft.team.chimeras.len(), 2);
+    assert_eq!(
+        draft
+            .team
+            .chimeras
+            .iter()
+            .find(|chimera| chimera.name == "Front")
+            .map(|chimera| chimera.slot),
+        Some(1)
+    );
+}
+
+#[test]
+fn deploy_should_reject_when_active_lineup_is_full() {
+    let mut draft =
+        DraftState::new(9, TeamSide::Challenger, "Draft Team").with_active_team_limit(1);
+    draft.shop.push(offer("Front"));
+    draft.shop.push(offer("Bench"));
+
+    draft.purchase(0).unwrap();
+    draft.purchase(0).unwrap();
+
+    assert_eq!(
+        draft.deploy_from_bench(0),
+        Err(DraftError::ActiveLineupFull { limit: 1 })
+    );
 }

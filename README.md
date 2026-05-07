@@ -10,7 +10,7 @@ This project is for private code reading and architecture practice. It does not 
 cargo run
 ```
 
-The app opens a Bevy debug UI. Press `Tab` to switch between Work Assignment and Chimera Battle, `Space` to advance the active mode, or `Esc` to quit.
+The app opens a Bevy debug UI. Press `Tab` to switch between Work Assignment and Chimera Battle, `Space` to advance the active mode, number keys `1-3` to buy draft shop offers, `R` to refresh the shop, `N` to reset the active mode, or `Esc` to quit.
 
 ## Test
 
@@ -77,15 +77,31 @@ Battle test content is loaded from RON files:
 
 The loader keeps config DTOs in `content::battle_config` and converts them into pure `core::battle` types. It validates duplicate ability ids and unknown ability references before building a `BattleDefinition`.
 
+## Battle Leader Flow
+
+Battle mode supports one optional run leader loaded from battle RON content:
+
+1. A `BattleLeader` owns a name and a list of `BattleLeaderEffect` values.
+2. Leader effects are applied when `BattleRunState` is created, before the first draft shop refresh.
+3. The current supported leader effects can add starting gold, run health, win gold reward, challenger team stats, and shop offer stats.
+4. Leader effects are deterministic run-level modifiers, so they can later cover richer trainer, equipment, shop, or tag-specific rules without coupling them to the turn resolver.
+
 ## Chimera Draft Flow
 
-Battle mode has a small draft/shop layer for building a lineup before combat:
+Battle mode has a small draft/shop layer and run loop for building a lineup before combat:
 
 1. A `DraftState` owns gold, the current team, and visible shop offers.
 2. Buying a new chimera costs 3 gold and adds it to the back of the lineup.
-3. Buying a duplicate merges into the existing chimera instead of adding a second copy.
-4. Each duplicate grants +1 ATK, +1 max HP, +1 current HP, and +1 experience.
-5. Level 2 costs 2 experience; Level 3 costs 3 experience.
+3. If the active lineup is full, buying a new chimera sends it to the bench.
+4. Buying a duplicate merges into the existing active or benched chimera instead of adding a second copy.
+5. Each duplicate grants +1 ATK, +1 max HP, +1 current HP, and +1 experience.
+6. Level 2 costs 2 experience; Level 3 costs 3 experience.
+7. Draft supports swapping active positions, moving active chimeras to the bench, and deploying benched chimeras while respecting the active lineup limit.
+8. `BattleRunState` moves from Draft to Battle, resolves the battle, grants configured win rewards, then returns to Draft for the next opponent.
+9. A run has configured opponents, health, win/loss counters, and completes when all opponents are defeated or health reaches zero.
+10. The shop refreshes each Draft round from the configured deterministic offer pool.
+11. The debug UI supports number-key purchases from the shop pool, `R` shop refreshes, `Q/W/E` adjacent lineup swaps, `B` bench, and `V` deploy.
+12. Run tuning lives in battle RON content: starting gold, health, damage per loss, reward per win, shop size, active lineup limit, opponent count, and shop offers.
 
 ## Directory Structure
 
@@ -107,6 +123,8 @@ src/
       event.rs
       model.rs
       resolver.rs
+      draft.rs
+      run.rs
   content/
     battle_config.rs
     battles.rs
@@ -122,7 +140,6 @@ src/
 ## Expansion Ideas
 
 - Add battle abilities for knockout, richer summon rules, and level-scaled effects.
-- Add shop refresh, equipment, trainer pools, and saved defense lineups.
-- Add a Bevy debug UI switch between Work Assignment and Chimera Battle.
-- Move hard-coded content to RON or TOML files.
+- Add equipment, trainer pools, tag-specific leader effects, and saved defense lineups.
+- Move remaining hard-coded prototype tuning to RON or TOML files.
 - Add richer Bevy UI panels, animation, and replay controls.
