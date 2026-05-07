@@ -1,7 +1,7 @@
 use crate::core::battle::{
     BattleAbilityDatabase, BattleAbilityDef, BattleAbilityId, BattleChimera, BattleChimeraId,
-    BattleEffect, BattleState, BattleStats, BattleTargetSelector, BattleTeam, BattleTrigger,
-    TeamSide,
+    BattleEffect, BattleEvent, BattleRarity, BattleRng, BattleState, BattleStats,
+    BattleTargetSelector, BattleTeam, BattleTrigger, TeamSide,
     resolver::{front_chimera_id, living_chimera_count},
 };
 
@@ -9,6 +9,10 @@ fn chimera(name: &str, slot: u32, attack: i32, hp: i32) -> BattleChimera {
     BattleChimera {
         name: name.to_string(),
         slot,
+        level: 1,
+        experience: 0,
+        rarity: BattleRarity::White,
+        tags: Vec::new(),
         stats: BattleStats {
             attack,
             max_hp: hp,
@@ -36,6 +40,7 @@ fn team(side: TeamSide, name: &str, chimeras: Vec<BattleChimera>) -> BattleTeam 
         side,
         name: name.to_string(),
         chimeras,
+        summon_queue: Vec::new(),
     }
 }
 
@@ -43,12 +48,14 @@ fn battle_state(challenger: Vec<BattleChimera>, defender: Vec<BattleChimera>) ->
     BattleState {
         name: "Test Battle".to_string(),
         turn: 0,
+        has_started: false,
         max_turn: 10,
         is_finished: false,
         winner: None,
         challenger: team(TeamSide::Challenger, "Challenger", challenger),
         defender: team(TeamSide::Defender, "Defender", defender),
         ability_database: BattleAbilityDatabase::default(),
+        rng: BattleRng::new(1),
     }
 }
 
@@ -203,4 +210,213 @@ fn workaholic_should_follow_up_after_attacking() {
     state.step_turn();
 
     assert_eq!(state.defender.chimeras[0].stats.hp, 4);
+}
+
+#[test]
+fn chance_effect_should_use_deterministic_rng() {
+    let lucky_hit = BattleAbilityId("lucky_hit");
+    let mut state = battle_state_with_abilities(
+        vec![chimera_with_ability("Lucky", 0, 1, 8, lucky_hit)],
+        vec![chimera("Target", 0, 1, 10)],
+        vec![BattleAbilityDef {
+            id: lucky_hit,
+            name: "Lucky Hit",
+            trigger: BattleTrigger::AfterAttack,
+            selector: BattleTargetSelector::FirstLivingEnemy,
+            effects: vec![BattleEffect::Chance {
+                percent: 100,
+                effects: vec![BattleEffect::DealDamage { amount: 2 }],
+            }],
+        }],
+    );
+
+    let outcome = state.step_turn();
+
+    assert_eq!(state.defender.chimeras[0].stats.hp, 7);
+    assert!(outcome.events.iter().any(|event| matches!(
+        event,
+        BattleEvent::ChanceRolled {
+            percent: 100,
+            success: true,
+            ..
+        }
+    )));
+}
+
+#[test]
+fn failed_chance_effect_should_not_apply_nested_effects() {
+    let unlucky_hit = BattleAbilityId("unlucky_hit");
+    let mut state = battle_state_with_abilities(
+        vec![chimera_with_ability("Unlucky", 0, 1, 8, unlucky_hit)],
+        vec![chimera("Target", 0, 1, 10)],
+        vec![BattleAbilityDef {
+            id: unlucky_hit,
+            name: "Unlucky Hit",
+            trigger: BattleTrigger::AfterAttack,
+            selector: BattleTargetSelector::FirstLivingEnemy,
+            effects: vec![BattleEffect::Chance {
+                percent: 0,
+                effects: vec![BattleEffect::DealDamage { amount: 2 }],
+            }],
+        }],
+    );
+
+    let outcome = state.step_turn();
+
+    assert_eq!(state.defender.chimeras[0].stats.hp, 9);
+    assert!(outcome.events.iter().any(|event| matches!(
+        event,
+        BattleEvent::ChanceRolled {
+            percent: 0,
+            success: false,
+            ..
+        }
+    )));
+}
+
+#[test]
+fn damaged_chimera_can_swap_with_ally_behind() {
+    let absentee_freak = BattleAbilityId("absentee_freak");
+    let mut state = battle_state_with_abilities(
+        vec![chimera("Attacker", 0, 1, 10)],
+        vec![
+            chimera_with_ability("Absentee Freak", 0, 1, 5, absentee_freak),
+            chimera("Back Ally", 1, 1, 5),
+        ],
+        vec![BattleAbilityDef {
+            id: absentee_freak,
+            name: "Absentee Freak",
+            trigger: BattleTrigger::AfterDamageTaken,
+            selector: BattleTargetSelector::AllyBehind,
+            effects: vec![BattleEffect::SwapWithTarget],
+        }],
+    );
+
+    state.step_turn();
+
+    assert_eq!(state.defender.chimeras[0].slot, 1);
+    assert_eq!(state.defender.chimeras[1].slot, 0);
+}
+
+#[test]
+fn ability_can_queue_and_deploy_summoned_chimera() {
+    let ruthless_demon = BattleAbilityId("ruthless_demon");
+    let mut state = battle_state_with_abilities(
+        vec![chimera("Attacker", 0, 1, 10)],
+        vec![chimera_with_ability(
+            "Ruthless Demon",
+            0,
+            1,
+            5,
+            ruthless_demon,
+        )],
+        vec![BattleAbilityDef {
+            id: ruthless_demon,
+            name: "Ruthless Demon",
+            trigger: BattleTrigger::AfterDamageTaken,
+            selector: BattleTargetSelector::SelfChimera,
+            effects: vec![BattleEffect::QueueSummon {
+                name: "Pressure Monster",
+                attack: 2,
+                hp: 3,
+                abilities: Vec::new(),
+            }],
+        }],
+    );
+
+    let outcome = state.step_turn();
+
+    assert_eq!(state.defender.chimeras.len(), 2);
+    assert_eq!(state.defender.chimeras[1].name, "Pressure Monster");
+    assert_eq!(state.defender.chimeras[1].slot, 1);
+    assert!(
+        outcome
+            .events
+            .iter()
+            .any(|event| matches!(event, BattleEvent::ChimeraSummoned { .. }))
+    );
+}
+
+#[test]
+fn battle_start_abilities_should_trigger_once_before_first_turn() {
+    let opening_shot = BattleAbilityId("opening_shot");
+    let mut state = battle_state_with_abilities(
+        vec![chimera_with_ability("Starter", 0, 1, 8, opening_shot)],
+        vec![chimera("Target", 0, 1, 10)],
+        vec![BattleAbilityDef {
+            id: opening_shot,
+            name: "Opening Shot",
+            trigger: BattleTrigger::BattleStart,
+            selector: BattleTargetSelector::FrontEnemy,
+            effects: vec![BattleEffect::DealDamage { amount: 2 }],
+        }],
+    );
+
+    state.step_turn();
+    state.step_turn();
+
+    assert_eq!(state.defender.chimeras[0].stats.hp, 6);
+}
+
+#[test]
+fn on_summon_abilities_should_target_summoned_chimera() {
+    let summoner = BattleAbilityId("summoner");
+    let trainer = BattleAbilityId("trainer");
+    let mut state = battle_state_with_abilities(
+        vec![chimera("Attacker", 0, 1, 10)],
+        vec![
+            chimera_with_ability("Summoner", 0, 1, 5, summoner),
+            chimera_with_ability("Trainer", 1, 1, 5, trainer),
+        ],
+        vec![
+            BattleAbilityDef {
+                id: summoner,
+                name: "Summoner",
+                trigger: BattleTrigger::AfterDamageTaken,
+                selector: BattleTargetSelector::SelfChimera,
+                effects: vec![BattleEffect::QueueSummon {
+                    name: "Token",
+                    attack: 1,
+                    hp: 2,
+                    abilities: Vec::new(),
+                }],
+            },
+            BattleAbilityDef {
+                id: trainer,
+                name: "Trainer",
+                trigger: BattleTrigger::OnSummon,
+                selector: BattleTargetSelector::SummonedChimera,
+                effects: vec![BattleEffect::AddAttack { amount: 2 }],
+            },
+        ],
+    );
+
+    state.step_turn();
+
+    assert_eq!(state.defender.chimeras[2].name, "Token");
+    assert_eq!(state.defender.chimeras[2].stats.attack, 3);
+}
+
+#[test]
+fn on_knockdown_abilities_should_trigger_for_living_chimeras() {
+    let kind_praiser = BattleAbilityId("kind_praiser");
+    let mut state = battle_state_with_abilities(
+        vec![
+            chimera("Front", 0, 3, 5),
+            chimera_with_ability("Kind Praiser", 1, 1, 5, kind_praiser),
+        ],
+        vec![chimera("Target", 0, 1, 3)],
+        vec![BattleAbilityDef {
+            id: kind_praiser,
+            name: "Kind Praiser",
+            trigger: BattleTrigger::OnKnockdown,
+            selector: BattleTargetSelector::AllAllies,
+            effects: vec![BattleEffect::AddAttack { amount: 1 }],
+        }],
+    );
+
+    state.step_turn();
+
+    assert_eq!(state.challenger.chimeras[0].stats.attack, 4);
+    assert_eq!(state.challenger.chimeras[1].stats.attack, 2);
 }

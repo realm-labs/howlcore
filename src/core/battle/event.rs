@@ -31,9 +31,25 @@ pub enum BattleEvent {
         target: BattleChimeraId,
         amount: i32,
     },
+    PositionSwapped {
+        first: BattleChimeraId,
+        second: BattleChimeraId,
+    },
+    ChimeraQueued {
+        side: TeamSide,
+        name: String,
+    },
+    ChimeraSummoned {
+        chimera: BattleChimeraId,
+    },
     AbilityTriggered {
         source: BattleChimeraId,
         ability: BattleAbilityId,
+    },
+    ChanceRolled {
+        percent: u32,
+        roll: u32,
+        success: bool,
     },
     ChimeraKnockedDown {
         chimera: BattleChimeraId,

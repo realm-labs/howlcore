@@ -11,8 +11,10 @@ pub enum BattleTrigger {
     TurnStart,
     BeforeDamageTaken,
     AfterDamageTaken,
+    OnAllyAttack,
     AfterAttack,
     OnAllyAheadDamaged,
+    OnSummon,
     OnKnockdown,
 }
 
@@ -21,6 +23,8 @@ pub enum BattleTargetSelector {
     SelfChimera,
     AttackTarget,
     DamageTarget,
+    SummonedChimera,
+    KnockedDownChimera,
     FrontEnemy,
     FirstLivingEnemy,
     AllyAhead,
@@ -33,11 +37,34 @@ pub enum BattleTargetSelector {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BattleEffect {
-    DealDamage { amount: i32 },
-    DealAttackDamagePercent { percent: u32, minimum: i32 },
-    Heal { amount: i32 },
-    AddAttack { amount: i32 },
-    ReduceIncomingDamage { amount: i32, minimum: i32 },
+    Chance {
+        percent: u32,
+        effects: Vec<BattleEffect>,
+    },
+    DealDamage {
+        amount: i32,
+    },
+    DealAttackDamagePercent {
+        percent: u32,
+        minimum: i32,
+    },
+    Heal {
+        amount: i32,
+    },
+    AddAttack {
+        amount: i32,
+    },
+    ReduceIncomingDamage {
+        amount: i32,
+        minimum: i32,
+    },
+    SwapWithTarget,
+    QueueSummon {
+        name: &'static str,
+        attack: i32,
+        hp: i32,
+        abilities: Vec<BattleAbilityId>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

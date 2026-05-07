@@ -5,6 +5,15 @@ use crate::core::battle::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BattleRarity {
+    White,
+    Blue,
+    Purple,
+    Gold,
+    Prismatic,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TeamSide {
     Challenger,
     Defender,
@@ -36,6 +45,10 @@ pub struct BattleStats {
 pub struct BattleChimera {
     pub name: String,
     pub slot: u32,
+    pub level: u32,
+    pub experience: u32,
+    pub rarity: BattleRarity,
+    pub tags: Vec<String>,
     pub stats: BattleStats,
     pub abilities: Vec<BattleAbilityId>,
 }
@@ -51,6 +64,7 @@ pub struct BattleTeam {
     pub side: TeamSide,
     pub name: String,
     pub chimeras: Vec<BattleChimera>,
+    pub summon_queue: Vec<BattleChimera>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,6 +74,7 @@ pub struct BattleDefinition {
     pub challenger: BattleTeam,
     pub defender: BattleTeam,
     pub ability_database: BattleAbilityDatabase,
+    pub rng_seed: u64,
     pub initial_logs: Vec<String>,
 }
 
@@ -67,12 +82,14 @@ pub struct BattleDefinition {
 pub struct BattleState {
     pub name: String,
     pub turn: u32,
+    pub has_started: bool,
     pub max_turn: u32,
     pub is_finished: bool,
     pub winner: Option<TeamSide>,
     pub challenger: BattleTeam,
     pub defender: BattleTeam,
     pub ability_database: BattleAbilityDatabase,
+    pub rng: BattleRng,
 }
 
 impl BattleState {
@@ -80,12 +97,14 @@ impl BattleState {
         Self {
             name: definition.name,
             turn: 0,
+            has_started: false,
             max_turn: definition.max_turn,
             is_finished: false,
             winner: None,
             challenger: definition.challenger,
             defender: definition.defender,
             ability_database: definition.ability_database,
+            rng: BattleRng::new(definition.rng_seed),
         }
     }
 
@@ -113,5 +132,24 @@ impl BattleState {
 
     pub fn chimera_mut(&mut self, id: BattleChimeraId) -> Option<&mut BattleChimera> {
         self.team_mut(id.side).chimeras.get_mut(id.index)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BattleRng {
+    state: u64,
+}
+
+impl BattleRng {
+    pub fn new(seed: u64) -> Self {
+        Self { state: seed.max(1) }
+    }
+
+    pub fn roll_percent(&mut self) -> u32 {
+        self.state = self
+            .state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        ((self.state >> 32) as u32 % 100) + 1
     }
 }

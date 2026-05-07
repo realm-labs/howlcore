@@ -53,9 +53,31 @@ Battle mode now has its own data-driven ability layer. The first supported trigg
 - `BeforeDamageTaken`: reduce incoming damage, used by Tough Cookie.
 - `OnAllyAheadDamaged`: react when the ally one slot ahead takes damage, used by Healer.
 - `AfterAttack`: perform follow-up damage, used by Workaholic.
-- Target selectors for self, attack target, damage target, front enemy, living enemies/allies, adjacent allies, and simple ranked enemy targets.
+- `AfterDamageTaken`: react after taking damage, used by Absentee Freak and Ruthless Demon.
+- `BattleStart`: fire once before the first turn, used by Little Villain.
+- `OnSummon`: react when a chimera joins the lineup from the summon queue.
+- `OnKnockdown`: react when a chimera is knocked down, used by Kind Praiser.
+- `Chance`: wraps nested effects behind a deterministic percent roll.
+- Target selectors for self, attack target, damage target, summoned chimera, knocked-down chimera, front enemy, living enemies/allies, adjacent allies, and simple ranked enemy targets.
 
 Damage is resolved through a small pipeline: attack request, incoming-damage modifiers, HP application, damage-taken reactions, ally reactions, and knockdown checks.
+
+Battle mode also supports two foundational field-control effects:
+
+- `SwapWithTarget`: swaps the source chimera's slot with a selected ally.
+- `QueueSummon`: adds a chimera to the team's summon queue and deploys queued summons to the back of the lineup.
+
+Battle state owns a deterministic RNG seed so probability effects can be replayed in tests and future battle logs. Chimeras also have baseline `level`, `rarity`, and `tags` fields for later shop, upgrade, equipment, and trainer-specific mechanics.
+
+## Chimera Draft Flow
+
+Battle mode has a small draft/shop layer for building a lineup before combat:
+
+1. A `DraftState` owns gold, the current team, and visible shop offers.
+2. Buying a new chimera costs 3 gold and adds it to the back of the lineup.
+3. Buying a duplicate merges into the existing chimera instead of adding a second copy.
+4. Each duplicate grants +1 ATK, +1 max HP, +1 current HP, and +1 experience.
+5. Level 2 costs 2 experience; Level 3 costs 3 experience.
 
 ## Directory Structure
 
@@ -90,8 +112,8 @@ src/
 
 ## Expansion Ideas
 
-- Add battle abilities for attack, damage, knockout, summon, and position-swap triggers.
-- Add battle shop, duplicate leveling, equipment, and saved defense lineups.
+- Add battle abilities for knockout, richer summon rules, and level-scaled effects.
+- Add shop refresh, equipment, trainer pools, and saved defense lineups.
 - Add a Bevy debug UI switch between Work Assignment and Chimera Battle.
 - Move hard-coded content to RON or TOML files.
 - Add richer Bevy UI panels, animation, and replay controls.

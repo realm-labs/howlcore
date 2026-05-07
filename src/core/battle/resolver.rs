@@ -10,6 +10,8 @@ use crate::core::battle::{
 struct BattleContext {
     attack_target: Option<BattleChimeraId>,
     damage_target: Option<BattleChimeraId>,
+    summoned: Option<BattleChimeraId>,
+    knocked_down: Option<BattleChimeraId>,
 }
 
 impl BattleContext {
@@ -17,6 +19,8 @@ impl BattleContext {
         Self {
             attack_target: None,
             damage_target: None,
+            summoned: None,
+            knocked_down: None,
         }
     }
 
@@ -24,6 +28,8 @@ impl BattleContext {
         Self {
             attack_target: Some(target),
             damage_target: None,
+            summoned: None,
+            knocked_down: None,
         }
     }
 
@@ -31,6 +37,26 @@ impl BattleContext {
         Self {
             attack_target: None,
             damage_target: Some(target),
+            summoned: None,
+            knocked_down: None,
+        }
+    }
+
+    fn summoned(summoned: BattleChimeraId) -> Self {
+        Self {
+            attack_target: None,
+            damage_target: None,
+            summoned: Some(summoned),
+            knocked_down: None,
+        }
+    }
+
+    fn knocked_down(knocked_down: BattleChimeraId) -> Self {
+        Self {
+            attack_target: None,
+            damage_target: None,
+            summoned: None,
+            knocked_down: Some(knocked_down),
         }
     }
 }
@@ -46,6 +72,25 @@ pub fn step_turn(state: &mut BattleState) -> BattleOutcome {
 
     if state.is_finished {
         return outcome;
+    }
+
+    if !state.has_started {
+        state.has_started = true;
+        outcome.push_log("Battle started.");
+        for source in living_chimeras(state) {
+            resolve_abilities(
+                state,
+                source,
+                BattleTrigger::BattleStart,
+                BattleContext::empty(),
+                &mut outcome,
+            );
+        }
+        check_battle_end(state, &mut outcome);
+
+        if state.is_finished {
+            return outcome;
+        }
     }
 
     state.turn += 1;
@@ -122,6 +167,9 @@ fn resolve_front_exchange(
         target: challenger,
         damage: defender_attack,
     });
+
+    resolve_ally_attack_abilities(state, challenger, defender, outcome);
+    resolve_ally_attack_abilities(state, defender, challenger, outcome);
 
     apply_damage(
         state,
@@ -243,6 +291,23 @@ fn resolve_incoming_damage_modifiers(
     }
 }
 
+fn resolve_ally_attack_abilities(
+    state: &mut BattleState,
+    attacker: BattleChimeraId,
+    target: BattleChimeraId,
+    outcome: &mut BattleOutcome,
+) {
+    let sources = living_chimeras_for_side(state, attacker.side)
+        .into_iter()
+        .filter(|source| *source != attacker)
+        .collect::<Vec<_>>();
+    let context = BattleContext::attack(target);
+
+    for source in sources {
+        resolve_abilities(state, source, BattleTrigger::OnAllyAttack, context, outcome);
+    }
+}
+
 fn resolve_ally_ahead_damaged_abilities(
     state: &mut BattleState,
     damaged: BattleChimeraId,
@@ -294,6 +359,8 @@ fn resolve_abilities(
                 apply_effect(state, source, target, effect, outcome);
             }
         }
+
+        deploy_queued_summons(state, source.side, outcome);
     }
 }
 
@@ -305,6 +372,13 @@ fn apply_effect(
     outcome: &mut BattleOutcome,
 ) {
     match effect {
+        BattleEffect::Chance { percent, effects } => {
+            if roll_chance(state, *percent, outcome) {
+                for effect in effects {
+                    apply_effect(state, source, target, effect, outcome);
+                }
+            }
+        }
         BattleEffect::DealDamage { amount } => apply_damage(
             state,
             DamageRequest {
@@ -327,7 +401,35 @@ fn apply_effect(
         BattleEffect::Heal { amount } => heal(state, target, *amount, outcome),
         BattleEffect::AddAttack { amount } => add_attack(state, target, *amount, outcome),
         BattleEffect::ReduceIncomingDamage { .. } => {}
+        BattleEffect::SwapWithTarget => swap_positions(state, source, target, outcome),
+        BattleEffect::QueueSummon {
+            name,
+            attack,
+            hp,
+            abilities,
+        } => queue_summon(state, source.side, name, *attack, *hp, abilities, outcome),
     }
+}
+
+fn roll_chance(state: &mut BattleState, percent: u32, outcome: &mut BattleOutcome) -> bool {
+    let percent = percent.min(100);
+    let roll = state.rng.roll_percent();
+    let success = roll <= percent;
+
+    outcome.push_event(BattleEvent::ChanceRolled {
+        percent,
+        roll,
+        success,
+    });
+    outcome.push_log(turn_line(
+        state.turn,
+        format!(
+            "Chance roll {roll}/100 against {percent}%: {}.",
+            if success { "success" } else { "failed" }
+        ),
+    ));
+
+    success
 }
 
 fn select_targets(
@@ -340,6 +442,8 @@ fn select_targets(
         BattleTargetSelector::SelfChimera => vec![source],
         BattleTargetSelector::AttackTarget => context.attack_target.into_iter().collect(),
         BattleTargetSelector::DamageTarget => context.damage_target.into_iter().collect(),
+        BattleTargetSelector::SummonedChimera => context.summoned.into_iter().collect(),
+        BattleTargetSelector::KnockedDownChimera => context.knocked_down.into_iter().collect(),
         BattleTargetSelector::FrontEnemy => front_chimera_id(state, source.side.opponent())
             .into_iter()
             .collect(),
@@ -522,8 +626,123 @@ fn add_attack(
     }
 }
 
+fn swap_positions(
+    state: &mut BattleState,
+    source: BattleChimeraId,
+    target: BattleChimeraId,
+    outcome: &mut BattleOutcome,
+) {
+    if source.side != target.side || source.index == target.index {
+        return;
+    }
+
+    let source_name = chimera_name(state, source);
+    let target_name = chimera_name(state, target);
+    let team = state.team_mut(source.side);
+
+    if source.index >= team.chimeras.len() || target.index >= team.chimeras.len() {
+        return;
+    }
+
+    let source_slot = team.chimeras[source.index].slot;
+    let target_slot = team.chimeras[target.index].slot;
+    team.chimeras[source.index].slot = target_slot;
+    team.chimeras[target.index].slot = source_slot;
+
+    outcome.push_event(BattleEvent::PositionSwapped {
+        first: source,
+        second: target,
+    });
+    outcome.push_log(turn_line(
+        state.turn,
+        format!("{source_name} swapped positions with {target_name}."),
+    ));
+}
+
+fn queue_summon(
+    state: &mut BattleState,
+    side: TeamSide,
+    name: &'static str,
+    attack: i32,
+    hp: i32,
+    abilities: &[crate::core::battle::BattleAbilityId],
+    outcome: &mut BattleOutcome,
+) {
+    let chimera = crate::core::battle::BattleChimera {
+        name: name.to_string(),
+        slot: 0,
+        level: 1,
+        experience: 0,
+        rarity: crate::core::battle::BattleRarity::White,
+        tags: Vec::new(),
+        stats: crate::core::battle::BattleStats {
+            attack,
+            max_hp: hp,
+            hp,
+        },
+        abilities: abilities.to_vec(),
+    };
+    state.team_mut(side).summon_queue.push(chimera);
+    outcome.push_event(BattleEvent::ChimeraQueued {
+        side,
+        name: name.to_string(),
+    });
+    outcome.push_log(turn_line(
+        state.turn,
+        format!("{name} was added to {:?}'s summon queue.", side),
+    ));
+}
+
+fn deploy_queued_summons(state: &mut BattleState, side: TeamSide, outcome: &mut BattleOutcome) {
+    loop {
+        if state.team(side).summon_queue.is_empty() {
+            break;
+        };
+
+        let mut chimera = state.team_mut(side).summon_queue.remove(0);
+        let slot = next_back_slot(state, side);
+        chimera.slot = slot;
+        let name = chimera.name.clone();
+        let index = state.team(side).chimeras.len();
+        state.team_mut(side).chimeras.push(chimera);
+        let id = BattleChimeraId { side, index };
+
+        outcome.push_event(BattleEvent::ChimeraSummoned { chimera: id });
+        outcome.push_log(turn_line(
+            state.turn,
+            format!("{name} joined {:?}'s lineup at slot {slot}.", side),
+        ));
+
+        resolve_on_summon_abilities(state, id, outcome);
+    }
+}
+
+fn resolve_on_summon_abilities(
+    state: &mut BattleState,
+    summoned: BattleChimeraId,
+    outcome: &mut BattleOutcome,
+) {
+    let sources = living_chimeras_for_side(state, summoned.side);
+    let context = BattleContext::summoned(summoned);
+
+    for source in sources {
+        resolve_abilities(state, source, BattleTrigger::OnSummon, context, outcome);
+    }
+}
+
+fn next_back_slot(state: &BattleState, side: TeamSide) -> u32 {
+    state
+        .team(side)
+        .chimeras
+        .iter()
+        .map(|chimera| chimera.slot)
+        .max()
+        .map(|slot| slot + 1)
+        .unwrap_or_default()
+}
+
 fn emit_knockdowns(
-    state: &BattleState,
+    state: &mut BattleState,
     chimeras: [BattleChimeraId; 2],
     outcome: &mut BattleOutcome,
 ) {
@@ -537,7 +756,24 @@ fn emit_knockdowns(
                 state.turn,
                 format!("{} was knocked down.", chimera_name(state, chimera)),
             ));
+            resolve_on_knockdown_abilities(state, chimera, outcome);
         }
+    }
+}
+
+fn resolve_on_knockdown_abilities(
+    state: &mut BattleState,
+    knocked_down: BattleChimeraId,
+    outcome: &mut BattleOutcome,
+) {
+    let sources = living_chimeras(state)
+        .into_iter()
+        .filter(|source| *source != knocked_down)
+        .collect::<Vec<_>>();
+    let context = BattleContext::knocked_down(knocked_down);
+
+    for source in sources {
+        resolve_abilities(state, source, BattleTrigger::OnKnockdown, context, outcome);
     }
 }
 
