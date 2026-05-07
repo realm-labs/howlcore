@@ -252,8 +252,9 @@ fn format_chimeras(state: &CombatState) -> String {
     chimeras
         .into_iter()
         .map(|chimera| {
+            let status = if chimera.is_active { "active" } else { "out" };
             format!(
-                "{}  slot {}\n  stamina {}/{}  efficiency {}\n",
+                "{}  slot {} ({status})\n  stamina {}/{}  efficiency {}\n",
                 chimera.name,
                 chimera.slot,
                 chimera.stats.stamina,

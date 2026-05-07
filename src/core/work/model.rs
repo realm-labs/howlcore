@@ -45,6 +45,7 @@ pub struct Chimera {
     pub name: String,
     pub team_id: u32,
     pub slot: u32,
+    pub is_active: bool,
     pub stats: Stats,
     pub traits: Vec<TraitId>,
     pub active_effects: ActiveEffects,

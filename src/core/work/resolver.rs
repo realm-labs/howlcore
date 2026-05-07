@@ -30,23 +30,35 @@ pub fn step_round(state: &mut CombatState) -> RoundOutcome {
         resolve_trigger_for_chimera(state, chimera, Trigger::RoundStart, &mut outcome);
     }
 
-    let order = action_order(state);
-    let names = order
+    let names = action_order(state)
         .iter()
         .map(|chimera| chimera_name(state, *chimera))
         .collect::<Vec<_>>();
     outcome.push_log(round_line(
         state.round,
-        format!("Action order: {}.", names.join(" -> ")),
+        format!("Work queue: {}.", names.join(" -> ")),
     ));
 
-    for chimera in order {
+    let max_work_actions = state.chimeras.len().saturating_mul(32).max(1);
+    let mut work_actions = 0;
+    for _ in 0..max_work_actions {
+        let Some(chimera) = next_work_chimera(state) else {
+            break;
+        };
+
+        work_actions += 1;
         outcome.push_event(CombatEvent::WorkActionRequested { chimera });
         perform_work_action(state, chimera, &mut outcome);
 
         if all_tasks_completed(state) {
             break;
         }
+    }
+    if work_actions == max_work_actions && next_work_chimera(state).is_some() {
+        outcome.push_log(round_line(
+            state.round,
+            "Work queue stopped after reaching the safety action limit.",
+        ));
     }
 
     for chimera in action_order(state) {
@@ -102,11 +114,17 @@ pub fn action_order(state: &CombatState) -> Vec<ChimeraId> {
         .chimeras
         .iter()
         .enumerate()
+        .filter(|(_, chimera)| chimera.is_active)
         .map(|(index, chimera)| (ChimeraId(index), chimera.slot))
         .collect::<Vec<_>>();
 
     chimeras.sort_by(|(_, left_slot), (_, right_slot)| right_slot.cmp(left_slot));
     chimeras.into_iter().map(|(id, _)| id).collect()
+}
+
+pub fn next_work_chimera(state: &CombatState) -> Option<ChimeraId> {
+    front_task_id(state)?;
+    action_order(state).into_iter().next()
 }
 
 pub fn select_targets(
@@ -245,6 +263,14 @@ pub fn perform_work_action(
 ) {
     let round = state.round;
     let source_name = chimera_name(state, chimera);
+    if !state
+        .chimera(chimera)
+        .map(|chimera| chimera.is_active)
+        .unwrap_or(false)
+    {
+        return;
+    }
+
     let Some(task) = front_task_id(state) else {
         outcome.push_log(round_line(
             round,
@@ -265,9 +291,10 @@ pub fn perform_work_action(
         outcome.push_log(round_line(
             round,
             format!(
-                "{source_name} skipped work. Stamina {stamina} is lower than required cost {cost}."
+                "{source_name} left the field. Stamina {stamina} is lower than required cost {cost}."
             ),
         ));
+        deactivate_chimera(state, chimera);
         return;
     }
 
@@ -294,6 +321,40 @@ pub fn perform_work_action(
     ));
 
     resolve_trigger_for_chimera(state, chimera, Trigger::AfterWork, outcome);
+    retire_if_unable_to_continue(state, chimera, outcome);
+}
+
+fn retire_if_unable_to_continue(
+    state: &mut CombatState,
+    chimera: ChimeraId,
+    outcome: &mut RoundOutcome,
+) {
+    let Some(task) = front_task_id(state) else {
+        return;
+    };
+    let Some(cost) = state.task(task).map(|task| task.progress.stamina_cost) else {
+        return;
+    };
+    let Some(stamina) = state.chimera(chimera).map(|chimera| chimera.stats.stamina) else {
+        return;
+    };
+
+    if stamina >= cost {
+        return;
+    }
+
+    let name = chimera_name(state, chimera);
+    deactivate_chimera(state, chimera);
+    outcome.push_log(round_line(
+        state.round,
+        format!("{name} left the field after running out of usable stamina."),
+    ));
+}
+
+fn deactivate_chimera(state: &mut CombatState, chimera: ChimeraId) {
+    if let Some(chimera) = state.chimera_mut(chimera) {
+        chimera.is_active = false;
+    }
 }
 
 pub fn resolve_trigger_for_chimera(
@@ -400,8 +461,9 @@ fn check_work_end(state: &mut CombatState, outcome: &mut RoundOutcome) {
 
     let all_completed = all_tasks_completed(state);
     let reached_max_round = state.round >= state.max_round;
+    let no_work_candidates = next_work_chimera(state).is_none();
 
-    if !all_completed && !reached_max_round {
+    if !all_completed && !reached_max_round && !no_work_candidates {
         return;
     }
 
@@ -430,6 +492,10 @@ fn trait_defs_for_chimera(
     let mut ids = Vec::new();
 
     if let Some(chimera) = state.chimera(chimera) {
+        if !chimera.is_active {
+            return Vec::new();
+        }
+
         ids.extend(chimera.traits.iter().copied());
         ids.extend(
             chimera
@@ -471,7 +537,9 @@ fn all_ally_targets(state: &CombatState, source: ChimeraId) -> Vec<EffectTarget>
         .chimeras
         .iter()
         .enumerate()
-        .filter(|(index, chimera)| *index != source.0 && chimera.team_id == source_team)
+        .filter(|(index, chimera)| {
+            chimera.is_active && *index != source.0 && chimera.team_id == source_team
+        })
         .map(|(index, chimera)| (ChimeraId(index), chimera.slot))
         .collect::<Vec<_>>();
     allies.sort_by_key(|(_, slot)| *slot);
@@ -496,7 +564,9 @@ fn ally_by_slot_offset(state: &CombatState, source: ChimeraId, offset: i32) -> V
         .iter()
         .enumerate()
         .find(|(_, chimera)| {
-            chimera.team_id == source.team_id && chimera.slot == wanted_slot as u32
+            chimera.is_active
+                && chimera.team_id == source.team_id
+                && chimera.slot == wanted_slot as u32
         })
         .map(|(index, _)| vec![EffectTarget::Chimera(ChimeraId(index))])
         .unwrap_or_default()
@@ -511,7 +581,7 @@ fn stamina_ranked_ally(state: &CombatState, source: ChimeraId, lowest: bool) -> 
         .chimeras
         .iter()
         .enumerate()
-        .filter(|(_, chimera)| chimera.team_id == source_team)
+        .filter(|(_, chimera)| chimera.is_active && chimera.team_id == source_team)
         .map(|(index, chimera)| (ChimeraId(index), chimera.stats.stamina))
         .collect::<Vec<_>>();
 
@@ -536,7 +606,7 @@ fn efficiency_ranked_ally(state: &CombatState, source: ChimeraId) -> Vec<EffectT
         .chimeras
         .iter()
         .enumerate()
-        .filter(|(_, chimera)| chimera.team_id == source_team)
+        .filter(|(_, chimera)| chimera.is_active && chimera.team_id == source_team)
         .map(|(index, chimera)| (ChimeraId(index), chimera.stats.efficiency))
         .collect::<Vec<_>>();
 

@@ -82,6 +82,7 @@ fn chimera(
         name: name.to_string(),
         team_id: 1,
         slot,
+        is_active: true,
         stats: Stats {
             max_stamina: stamina,
             stamina,

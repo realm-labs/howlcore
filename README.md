@@ -34,10 +34,11 @@ The two modes intentionally use separate models. Work mode has `efficiency`, `st
 1. The app creates a test team of five chimeras.
 2. The stage creates three work tasks.
 3. Each `Space` press advances one round.
-4. Chimeras act from the rightmost slot to the leftmost slot: `slot 4 -> slot 3 -> slot 2 -> slot 1 -> slot 0`.
+4. The work queue repeatedly selects the current rightmost active chimera.
 5. A chimera checks stamina, consumes the current front task's stamina cost, resolves `OnWork` traits, then contributes base progress by efficiency.
-6. Completed tasks grant Awoo Cookies.
-7. The work ends when all tasks are complete or the max round count is reached.
+6. If a chimera no longer has enough stamina for its next task, it leaves the field and stops working.
+7. Completed tasks grant Awoo Cookies.
+8. The work ends when all tasks are complete, the max round count is reached, or no active chimera can work.
 
 ## Chimera Battle Flow
 

@@ -3,7 +3,7 @@ use crate::core::work::{
     TaskId, TaskProgress, TraitDatabase, WorkTask,
     resolver::{
         EffectTarget, action_order, advance_task_progress, expire_timed_effects, front_task_id,
-        perform_work_action, select_targets,
+        next_work_chimera, perform_work_action, select_targets,
     },
 };
 
@@ -36,6 +36,7 @@ fn add_chimera(state: &mut CombatState, name: &str, slot: u32, stamina: i32) -> 
         name: name.to_string(),
         team_id: 1,
         slot,
+        is_active: true,
         stats: Stats {
             max_stamina: 20,
             stamina,
@@ -69,6 +70,30 @@ fn action_order_should_start_from_rightmost_slot() {
     let right = add_chimera(&mut state, "Rat Race King", 4, 20);
 
     assert_eq!(action_order(&state), vec![right, middle, left]);
+}
+
+#[test]
+fn next_work_chimera_should_keep_rightmost_active_until_it_leaves() {
+    let mut state = test_state();
+    add_task(&mut state, 0, 100, false);
+    let _left = add_chimera(&mut state, "Left Worker", 0, 20);
+    let right = add_chimera(&mut state, "Right Worker", 4, 4);
+
+    assert_eq!(next_work_chimera(&state), Some(right));
+
+    let outcome = state.step_round();
+    let work_actions = outcome
+        .events
+        .iter()
+        .filter_map(|event| match event {
+            crate::core::work::CombatEvent::WorkActionRequested { chimera } => Some(*chimera),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(work_actions[0], right);
+    assert_eq!(work_actions[1], right);
+    assert!(!state.chimera(right).unwrap().is_active);
 }
 
 #[test]
@@ -119,6 +144,7 @@ fn chimera_should_skip_action_when_stamina_is_not_enough() {
 
     assert_eq!(state.task(task).unwrap().progress.current, 0);
     assert_eq!(state.chimera(chimera).unwrap().stats.stamina, 1);
+    assert!(!state.chimera(chimera).unwrap().is_active);
 }
 
 #[test]
