@@ -1,0 +1,86 @@
+(
+    abilities: [
+        (
+            id: "workaholic",
+            name: "Workaholic",
+            trigger: AfterAttack,
+            selector: FirstLivingEnemy,
+            effects: [
+                Chance(
+                    percent: 30,
+                    effects: [
+                        DealAttackDamagePercent(percent: 20, minimum: 1),
+                    ],
+                ),
+            ],
+        ),
+        (
+            id: "tough_cookie",
+            name: "Tough Cookie",
+            trigger: BeforeDamageTaken,
+            selector: SelfChimera,
+            effects: [
+                ReduceIncomingDamage(amount: 1, minimum: 1),
+            ],
+        ),
+        (
+            id: "soothing_care",
+            name: "Soothing Care",
+            trigger: OnAllyAheadDamaged,
+            selector: DamageTarget,
+            effects: [
+                Heal(amount: 1),
+            ],
+        ),
+        (
+            id: "absentee_freak",
+            name: "Absentee Freak",
+            trigger: AfterDamageTaken,
+            selector: AllyBehind,
+            effects: [
+                SwapWithTarget,
+            ],
+        ),
+        (
+            id: "ruthless_demon",
+            name: "Ruthless Demon",
+            trigger: AfterDamageTaken,
+            selector: SelfChimera,
+            effects: [
+                QueueSummon(
+                    name: "Pressure Monster",
+                    attack: 2,
+                    hp: 3,
+                    abilities: [],
+                ),
+            ],
+        ),
+        (
+            id: "little_villain",
+            name: "Little Villain",
+            trigger: BattleStart,
+            selector: FrontEnemy,
+            effects: [
+                DealDamage(amount: 1),
+            ],
+        ),
+        (
+            id: "kind_praiser",
+            name: "Kind Praiser",
+            trigger: OnKnockdown,
+            selector: AllAllies,
+            effects: [
+                AddAttack(amount: 1),
+            ],
+        ),
+        (
+            id: "summon_trainer",
+            name: "Summon Trainer",
+            trigger: OnSummon,
+            selector: SummonedChimera,
+            effects: [
+                AddAttack(amount: 1),
+            ],
+        ),
+    ],
+)

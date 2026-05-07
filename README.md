@@ -69,6 +69,13 @@ Battle mode also supports two foundational field-control effects:
 
 Battle state owns a deterministic RNG seed so probability effects can be replayed in tests and future battle logs. Chimeras also have baseline `level`, `rarity`, and `tags` fields for later shop, upgrade, equipment, and trainer-specific mechanics.
 
+Battle test content is loaded from RON files:
+
+- `assets/battle/abilities.ron`
+- `assets/battle/test_battle.ron`
+
+The loader keeps config DTOs in `content::battle_config` and converts them into pure `core::battle` types. It validates duplicate ability ids and unknown ability references before building a `BattleDefinition`.
+
 ## Chimera Draft Flow
 
 Battle mode has a small draft/shop layer for building a lineup before combat:
@@ -100,6 +107,7 @@ src/
       model.rs
       resolver.rs
   content/
+    battle_config.rs
     battles.rs
     chimeras.rs
     stages.rs

@@ -1,0 +1,66 @@
+(
+    name: "Chimera Scrimmage",
+    max_turn: 20,
+    rng_seed: 1,
+    challenger: (
+        name: "Challenger",
+        chimeras: [
+            (
+                name: "Rat Race King",
+                attack: 3,
+                hp: 8,
+                abilities: ["kind_praiser"],
+            ),
+            (
+                name: "Healer",
+                attack: 2,
+                hp: 6,
+                abilities: ["soothing_care"],
+            ),
+            (
+                name: "Workaholic",
+                attack: 5,
+                hp: 5,
+                abilities: ["workaholic"],
+            ),
+            (
+                name: "Absentee Freak",
+                attack: 1,
+                hp: 3,
+                abilities: ["absentee_freak"],
+            ),
+        ],
+    ),
+    defender: (
+        name: "Defender",
+        chimeras: [
+            (
+                name: "Tough Cookie",
+                attack: 2,
+                hp: 10,
+                abilities: ["tough_cookie", "summon_trainer"],
+            ),
+            (
+                name: "Pressure Monster",
+                attack: 4,
+                hp: 5,
+            ),
+            (
+                name: "Ruthless Demon",
+                attack: 4,
+                hp: 7,
+                abilities: ["ruthless_demon"],
+            ),
+            (
+                name: "Little Villain",
+                attack: 1,
+                hp: 2,
+                abilities: ["little_villain"],
+            ),
+        ],
+    ),
+    initial_logs: [
+        "Battle: Chimera Scrimmage",
+        "Each turn, both front chimeras attack each other.",
+    ],
+)
