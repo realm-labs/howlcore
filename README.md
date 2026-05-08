@@ -97,11 +97,11 @@ Battle mode has a small draft/shop layer and run loop for building a lineup befo
 5. Each duplicate grants +1 ATK, +1 max HP, +1 current HP, and +1 experience.
 6. Level 2 costs 2 experience; Level 3 costs 3 experience.
 7. Draft supports swapping active positions, moving active chimeras to the bench, and deploying benched chimeras while respecting the active lineup limit.
-8. `BattleRunState` moves from Draft to Battle, resolves the battle, grants configured win rewards, then returns to Draft for the next opponent.
-9. A run has configured opponents, health, win/loss counters, and completes when all opponents are defeated or health reaches zero.
+8. `BattleRunState` moves from Draft to the next configured opponent round, resolves the battle, grants that round's win reward, then returns to Draft for the next opponent.
+9. A run has explicit opponent rounds, health, win/loss counters, and completes when all opponents are defeated or health reaches zero.
 10. The shop refreshes each Draft round from the configured deterministic offer pool.
 11. The debug UI supports number-key purchases from the shop pool, `R` shop refreshes, `Q/W/E` adjacent lineup swaps, `B` bench, and `V` deploy.
-12. Run tuning lives in battle RON content: starting gold, health, damage per loss, reward per win, shop size, active lineup limit, opponent count, and shop offers.
+12. Run tuning lives in battle RON content: starting gold, health, default damage/reward values, shop size, active lineup limit, explicit opponent rounds, and shop offers.
 
 ## Directory Structure
 

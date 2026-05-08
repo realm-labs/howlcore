@@ -4,10 +4,10 @@ use serde::Deserialize;
 use std::collections::HashSet;
 
 use crate::core::battle::{
-    BATTLE_LOSS_HEALTH_DAMAGE, BATTLE_RUN_HEALTH, BATTLE_RUN_ROUNDS, BATTLE_SHOP_SIZE,
-    BATTLE_STARTING_GOLD, BATTLE_WIN_GOLD_REWARD, BattleAbilityDatabase, BattleAbilityDef,
-    BattleAbilityId, BattleChimera, BattleChimeraOffer, BattleDefinition, BattleEffect,
-    BattleLeader, BattleLeaderEffect, BattleRarity, BattleRunConfig, BattleStats,
+    BATTLE_LOSS_HEALTH_DAMAGE, BATTLE_RUN_HEALTH, BATTLE_SHOP_SIZE, BATTLE_STARTING_GOLD,
+    BATTLE_WIN_GOLD_REWARD, BattleAbilityDatabase, BattleAbilityDef, BattleAbilityId,
+    BattleChimera, BattleChimeraOffer, BattleDefinition, BattleEffect, BattleLeader,
+    BattleLeaderEffect, BattleOpponentRound, BattleRarity, BattleRunConfig, BattleStats,
     BattleTargetSelector, BattleTeam, BattleTrigger, DEFAULT_ACTIVE_TEAM_LIMIT, TeamSide,
 };
 
@@ -79,10 +79,22 @@ pub struct RunConfig {
     pub loss_health_damage: i32,
     #[serde(default = "default_win_gold_reward")]
     pub win_gold_reward: i32,
-    #[serde(default = "default_defender_rounds")]
-    pub defender_rounds: usize,
+    #[serde(default)]
+    pub opponent_rounds: Vec<OpponentRoundConfig>,
     #[serde(default)]
     pub shop_pool: Vec<ChimeraConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct OpponentRoundConfig {
+    pub name: String,
+    pub defender: TeamConfig,
+    #[serde(default)]
+    pub win_gold_reward: Option<i32>,
+    #[serde(default)]
+    pub loss_health_damage: Option<i32>,
+    #[serde(default)]
+    pub is_boss: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -219,6 +231,14 @@ fn validate_config(
         }
     }
 
+    for round in &battle.run.opponent_rounds {
+        for chimera in &round.defender.chimeras {
+            for ability in &chimera.abilities {
+                validate_ability_ref(ability, &ability_ids)?;
+            }
+        }
+    }
+
     for offer in &battle.run.shop_pool {
         for ability in &offer.abilities {
             validate_ability_ref(ability, &ability_ids)?;
@@ -289,8 +309,28 @@ fn build_run_config(run: RunConfig) -> BattleRunConfig {
         health: run.health,
         loss_health_damage: run.loss_health_damage,
         win_gold_reward: run.win_gold_reward,
-        defender_rounds: run.defender_rounds,
+        opponent_rounds: run
+            .opponent_rounds
+            .into_iter()
+            .map(|round| build_opponent_round(round, run.win_gold_reward, run.loss_health_damage))
+            .collect(),
         shop_pool: run.shop_pool.into_iter().map(build_offer).collect(),
+    }
+}
+
+fn build_opponent_round(
+    round: OpponentRoundConfig,
+    default_win_gold_reward: i32,
+    default_loss_health_damage: i32,
+) -> BattleOpponentRound {
+    BattleOpponentRound {
+        name: round.name,
+        defender: build_team(TeamSide::Defender, round.defender),
+        win_gold_reward: round.win_gold_reward.unwrap_or(default_win_gold_reward),
+        loss_health_damage: round
+            .loss_health_damage
+            .unwrap_or(default_loss_health_damage),
+        is_boss: round.is_boss,
     }
 }
 
@@ -465,7 +505,7 @@ impl Default for RunConfig {
             health: default_run_health(),
             loss_health_damage: default_loss_health_damage(),
             win_gold_reward: default_win_gold_reward(),
-            defender_rounds: default_defender_rounds(),
+            opponent_rounds: Vec::new(),
             shop_pool: Vec::new(),
         }
     }
@@ -493,10 +533,6 @@ fn default_loss_health_damage() -> i32 {
 
 fn default_win_gold_reward() -> i32 {
     BATTLE_WIN_GOLD_REWARD
-}
-
-fn default_defender_rounds() -> usize {
-    BATTLE_RUN_ROUNDS
 }
 
 fn ability_id(value: String) -> BattleAbilityId {

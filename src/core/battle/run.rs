@@ -2,8 +2,8 @@
 
 use crate::core::battle::{
     BattleAbilityDatabase, BattleAbilityId, BattleChimeraOffer, BattleDefinition, BattleLeader,
-    BattleLeaderEffect, BattleOutcome, BattleRarity, BattleRng, BattleRunConfig, BattleState,
-    BattleTeam, DEFAULT_ACTIVE_TEAM_LIMIT, DraftState, TeamSide,
+    BattleLeaderEffect, BattleOpponentRound, BattleOutcome, BattleRarity, BattleRng,
+    BattleRunConfig, BattleState, BattleTeam, DEFAULT_ACTIVE_TEAM_LIMIT, DraftState, TeamSide,
 };
 
 pub const BATTLE_WIN_GOLD_REWARD: i32 = 3;
@@ -11,7 +11,6 @@ pub const BATTLE_STARTING_GOLD: i32 = 6;
 pub const BATTLE_SHOP_SIZE: usize = 3;
 pub const BATTLE_RUN_HEALTH: i32 = 3;
 pub const BATTLE_LOSS_HEALTH_DAMAGE: i32 = 1;
-pub const BATTLE_RUN_ROUNDS: usize = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BattleRunPhase {
@@ -35,11 +34,17 @@ pub enum BattleRunStep {
     BattleResolved { winner: Option<TeamSide> },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BattleRunResult {
+    Victory,
+    Defeat,
+}
+
 #[derive(Debug, Clone)]
 pub struct BattleRunState {
     pub phase: BattleRunPhase,
     pub draft: DraftState,
-    pub defenders: Vec<BattleTeam>,
+    pub opponents: Vec<BattleOpponentRound>,
     pub battle: Option<BattleState>,
     pub ability_database: BattleAbilityDatabase,
     pub leader: Option<BattleLeader>,
@@ -55,6 +60,7 @@ pub struct BattleRunState {
     pub next_offer_index: usize,
     pub wins: u32,
     pub losses: u32,
+    pub result: Option<BattleRunResult>,
 }
 
 impl BattleRunState {
@@ -71,7 +77,7 @@ impl BattleRunState {
                 active_team_limit: run_config.active_team_limit,
                 shop: Vec::new(),
             },
-            defenders: defender_schedule(definition.defender, run_config.defender_rounds),
+            opponents: run_config.opponent_rounds,
             battle: None,
             ability_database: definition.ability_database,
             leader: definition.leader,
@@ -87,6 +93,7 @@ impl BattleRunState {
             next_offer_index: 0,
             wins: 0,
             losses: 0,
+            result: None,
         };
         let _ = run.refresh_shop();
         run
@@ -115,20 +122,21 @@ impl BattleRunState {
             return Err(BattleRunError::EmptyChallengerTeam);
         }
 
-        let Some(defender) = self.defenders.get(self.battle_index).cloned() else {
+        let Some(opponent) = self.opponents.get(self.battle_index).cloned() else {
             self.phase = BattleRunPhase::Complete;
+            self.result = Some(BattleRunResult::Victory);
             return Err(BattleRunError::NoDefenderAvailable);
         };
 
         self.battle = Some(BattleState {
-            name: format!("Battle {}", self.battle_index + 1),
+            name: format!("Battle {} - {}", self.battle_index + 1, opponent.name),
             turn: 0,
             has_started: false,
             max_turn: self.max_turn,
             is_finished: false,
             winner: None,
             challenger: reset_team_for_battle(self.draft.team.clone()),
-            defender: reset_team_for_battle(defender),
+            defender: reset_team_for_battle(opponent.defender),
             ability_database: self.ability_database.clone(),
             rng: BattleRng::new(self.rng_seed + self.battle_index as u64),
         });
@@ -170,23 +178,30 @@ impl BattleRunState {
     fn resolve_battle(&mut self, winner: Option<TeamSide>, outcome: &mut BattleOutcome) {
         match winner {
             Some(TeamSide::Challenger) => {
+                let reward = self.current_opponent_win_reward();
                 self.wins += 1;
-                self.draft.gold += self.win_gold_reward;
-                outcome.push_log(format!("Run reward: gained {} gold.", self.win_gold_reward));
+                self.draft.gold += reward;
+                outcome.push_log(format!("Run reward: gained {reward} gold."));
             }
             Some(TeamSide::Defender) | None => {
+                let damage = self.current_opponent_loss_damage();
                 self.losses += 1;
-                self.health = (self.health - self.loss_health_damage).max(0);
+                self.health = (self.health - damage).max(0);
                 outcome.push_log(format!(
-                    "Run damage: lost {} health. Health: {}/{}.",
-                    self.loss_health_damage, self.health, self.max_health
+                    "Run damage: lost {damage} health. Health: {}/{}.",
+                    self.health, self.max_health
                 ));
             }
         }
 
         self.battle = None;
         self.battle_index += 1;
-        self.phase = if self.health <= 0 || self.battle_index >= self.defenders.len() {
+        self.phase = if self.health <= 0 || self.battle_index >= self.opponents.len() {
+            self.result = Some(if self.health <= 0 {
+                BattleRunResult::Defeat
+            } else {
+                BattleRunResult::Victory
+            });
             BattleRunPhase::Complete
         } else {
             BattleRunPhase::Draft
@@ -205,6 +220,22 @@ impl BattleRunState {
         let offer = self.shop_pool[self.next_offer_index % self.shop_pool.len()].clone();
         self.next_offer_index += 1;
         Some(offer)
+    }
+
+    pub fn current_opponent(&self) -> Option<&BattleOpponentRound> {
+        self.opponents.get(self.battle_index)
+    }
+
+    fn current_opponent_win_reward(&self) -> i32 {
+        self.current_opponent()
+            .map(|opponent| opponent.win_gold_reward)
+            .unwrap_or(self.win_gold_reward)
+    }
+
+    fn current_opponent_loss_damage(&self) -> i32 {
+        self.current_opponent()
+            .map(|opponent| opponent.loss_health_damage)
+            .unwrap_or(self.loss_health_damage)
     }
 }
 
@@ -227,6 +258,9 @@ fn apply_leader(
             }
             BattleLeaderEffect::AddWinGoldReward { amount } => {
                 config.win_gold_reward += amount;
+                for opponent in &mut config.opponent_rounds {
+                    opponent.win_gold_reward += amount;
+                }
             }
             BattleLeaderEffect::AddTeamStats { attack, hp } => {
                 add_team_stats(challenger, attack, hp);
@@ -255,9 +289,6 @@ fn effective_run_config(mut config: BattleRunConfig) -> BattleRunConfig {
     }
     if config.loss_health_damage <= 0 {
         config.loss_health_damage = BATTLE_LOSS_HEALTH_DAMAGE;
-    }
-    if config.defender_rounds == 0 {
-        config.defender_rounds = BATTLE_RUN_ROUNDS;
     }
     if config.shop_pool.is_empty() {
         config.shop_pool = default_shop_pool();
@@ -289,30 +320,10 @@ impl Default for BattleRunConfig {
             health: BATTLE_RUN_HEALTH,
             loss_health_damage: BATTLE_LOSS_HEALTH_DAMAGE,
             win_gold_reward: BATTLE_WIN_GOLD_REWARD,
-            defender_rounds: BATTLE_RUN_ROUNDS,
+            opponent_rounds: Vec::new(),
             shop_pool: default_shop_pool(),
         }
     }
-}
-
-fn defender_schedule(defender: BattleTeam, defender_rounds: usize) -> Vec<BattleTeam> {
-    (0..defender_rounds)
-        .map(|round| scaled_defender(defender.clone(), round as i32))
-        .collect()
-}
-
-fn scaled_defender(mut defender: BattleTeam, bonus: i32) -> BattleTeam {
-    if bonus == 0 {
-        return defender;
-    }
-
-    defender.name = format!("{} +{}", defender.name, bonus);
-    for chimera in &mut defender.chimeras {
-        chimera.stats.attack += bonus;
-        chimera.stats.max_hp += bonus;
-        chimera.stats.hp = chimera.stats.max_hp;
-    }
-    defender
 }
 
 fn default_shop_pool() -> Vec<BattleChimeraOffer> {

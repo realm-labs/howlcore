@@ -104,8 +104,17 @@ pub struct BattleRunConfig {
     pub health: i32,
     pub loss_health_damage: i32,
     pub win_gold_reward: i32,
-    pub defender_rounds: usize,
+    pub opponent_rounds: Vec<BattleOpponentRound>,
     pub shop_pool: Vec<BattleChimeraOffer>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BattleOpponentRound {
+    pub name: String,
+    pub defender: BattleTeam,
+    pub win_gold_reward: i32,
+    pub loss_health_damage: i32,
+    pub is_boss: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

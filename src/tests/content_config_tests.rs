@@ -18,8 +18,10 @@ fn test_battle_should_load_from_ron_config() {
         battle.leader.as_ref().map(|leader| leader.name.as_str()),
         Some("Field Captain")
     );
-    assert_eq!(battle.run.defender_rounds, 3);
     assert_eq!(battle.run.active_team_limit, 4);
+    assert_eq!(battle.run.opponent_rounds.len(), 3);
+    assert_eq!(battle.run.opponent_rounds[0].name, "Opening Match");
+    assert!(battle.run.opponent_rounds[2].is_boss);
     assert_eq!(battle.run.shop_pool.len(), 4);
     assert!(
         battle

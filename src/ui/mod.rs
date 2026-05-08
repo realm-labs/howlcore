@@ -533,7 +533,7 @@ fn format_score_line(gameplay: &GameplayResource) -> String {
                     run.wins,
                     run.losses,
                     run.battle_index + usize::from(run.phase != BattleRunPhase::Complete),
-                    run.defenders.len()
+                    run.opponents.len()
                 ),
             }
         }
@@ -763,13 +763,21 @@ fn format_run_details(run: &BattleRunState) -> String {
                     .collect::<Vec<_>>()
                     .join("\n")
             };
-            let opponent = run
-                .defenders
-                .get(run.battle_index)
-                .map(|team| team.name.as_str())
+            let opponent = run.current_opponent();
+            let opponent_name = opponent
+                .map(|opponent| opponent.name.as_str())
                 .unwrap_or("None");
+            let opponent_kind = opponent
+                .map(|opponent| if opponent.is_boss { "boss" } else { "normal" })
+                .unwrap_or("none");
+            let win_reward = opponent
+                .map(|opponent| opponent.win_gold_reward)
+                .unwrap_or(run.win_gold_reward);
+            let loss_damage = opponent
+                .map(|opponent| opponent.loss_health_damage)
+                .unwrap_or(run.loss_health_damage);
             format!(
-                "Draft\n  Leader: {}\n  Health: {}/{}\n  Gold: {}\n  Active lineup: {}/{}\n  Bench: {}\n  Next opponent: {opponent}\n  Press Space to start battle.\n\nLeader Effects\n{}\n\nShop\n{shop}",
+                "Draft\n  Leader: {}\n  Health: {}/{}\n  Gold: {}\n  Active lineup: {}/{}\n  Bench: {}\n  Next opponent: {opponent_name} ({opponent_kind})\n  Win reward: {win_reward} gold\n  Loss damage: {loss_damage} health\n  Press Space to start battle.\n\nLeader Effects\n{}\n\nShop\n{shop}",
                 leader_name(run),
                 run.health,
                 run.max_health,
@@ -781,8 +789,15 @@ fn format_run_details(run: &BattleRunState) -> String {
             )
         }
         (BattleRunPhase::Complete, _) => format!(
-            "Run complete.\nWins: {}\nLosses: {}\nHealth: {}/{}\nGold: {}",
-            run.wins, run.losses, run.health, run.max_health, run.draft.gold
+            "Run complete.\nResult: {}\nWins: {}\nLosses: {}\nHealth: {}/{}\nGold: {}",
+            run.result
+                .map(|result| format!("{result:?}"))
+                .unwrap_or_else(|| "Unknown".to_string()),
+            run.wins,
+            run.losses,
+            run.health,
+            run.max_health,
+            run.draft.gold
         ),
         (BattleRunPhase::Battle, None) => "Battle is preparing.".to_string(),
     }

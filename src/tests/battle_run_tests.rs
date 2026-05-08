@@ -1,8 +1,8 @@
 use crate::core::battle::{
-    BATTLE_LOSS_HEALTH_DAMAGE, BATTLE_RUN_HEALTH, BATTLE_RUN_ROUNDS, BATTLE_SHOP_SIZE,
-    BATTLE_STARTING_GOLD, BATTLE_WIN_GOLD_REWARD, BattleAbilityDatabase, BattleChimera,
-    BattleDefinition, BattleLeader, BattleLeaderEffect, BattleRarity, BattleRunConfig,
-    BattleRunPhase, BattleRunState, BattleRunStep, BattleStats, BattleTeam, TeamSide,
+    BATTLE_LOSS_HEALTH_DAMAGE, BATTLE_RUN_HEALTH, BATTLE_SHOP_SIZE, BATTLE_STARTING_GOLD,
+    BATTLE_WIN_GOLD_REWARD, BattleAbilityDatabase, BattleChimera, BattleDefinition, BattleLeader,
+    BattleLeaderEffect, BattleOpponentRound, BattleRarity, BattleRunConfig, BattleRunPhase,
+    BattleRunResult, BattleRunState, BattleRunStep, BattleStats, BattleTeam, TeamSide,
 };
 
 fn chimera(name: &str, slot: u32, attack: i32, hp: i32) -> BattleChimera {
@@ -32,6 +32,11 @@ fn team(side: TeamSide, name: &str, chimeras: Vec<BattleChimera>) -> BattleTeam 
 }
 
 fn battle_definition() -> BattleDefinition {
+    let defender = team(
+        TeamSide::Defender,
+        "Defender",
+        vec![chimera("Loser", 0, 1, 3)],
+    );
     BattleDefinition {
         name: "Run Test".to_string(),
         max_turn: 10,
@@ -40,20 +45,21 @@ fn battle_definition() -> BattleDefinition {
             "Challenger",
             vec![chimera("Winner", 0, 5, 10)],
         ),
-        defender: team(
-            TeamSide::Defender,
-            "Defender",
-            vec![chimera("Loser", 0, 1, 3)],
-        ),
+        defender: defender.clone(),
         ability_database: BattleAbilityDatabase::default(),
         rng_seed: 1,
         leader: None,
-        run: BattleRunConfig::default(),
+        run: run_config(defender),
         initial_logs: Vec::new(),
     }
 }
 
 fn losing_battle_definition() -> BattleDefinition {
+    let defender = team(
+        TeamSide::Defender,
+        "Defender",
+        vec![chimera("Winner", 0, 5, 10)],
+    );
     BattleDefinition {
         name: "Run Test".to_string(),
         max_turn: 10,
@@ -62,16 +68,41 @@ fn losing_battle_definition() -> BattleDefinition {
             "Challenger",
             vec![chimera("Loser", 0, 1, 3)],
         ),
-        defender: team(
-            TeamSide::Defender,
-            "Defender",
-            vec![chimera("Winner", 0, 5, 10)],
-        ),
+        defender: defender.clone(),
         ability_database: BattleAbilityDatabase::default(),
         rng_seed: 1,
         leader: None,
-        run: BattleRunConfig::default(),
+        run: run_config(defender),
         initial_logs: Vec::new(),
+    }
+}
+
+fn run_config(defender: BattleTeam) -> BattleRunConfig {
+    BattleRunConfig {
+        opponent_rounds: vec![
+            BattleOpponentRound {
+                name: "Round 1".to_string(),
+                defender: defender.clone(),
+                win_gold_reward: BATTLE_WIN_GOLD_REWARD,
+                loss_health_damage: BATTLE_LOSS_HEALTH_DAMAGE,
+                is_boss: false,
+            },
+            BattleOpponentRound {
+                name: "Round 2".to_string(),
+                defender: defender.clone(),
+                win_gold_reward: BATTLE_WIN_GOLD_REWARD,
+                loss_health_damage: BATTLE_LOSS_HEALTH_DAMAGE,
+                is_boss: false,
+            },
+            BattleOpponentRound {
+                name: "Final Round".to_string(),
+                defender,
+                win_gold_reward: BATTLE_WIN_GOLD_REWARD,
+                loss_health_damage: BATTLE_LOSS_HEALTH_DAMAGE,
+                is_boss: true,
+            },
+        ],
+        ..BattleRunConfig::default()
     }
 }
 
@@ -94,7 +125,7 @@ fn run_should_create_initial_shop_offers() {
     assert_eq!(run.draft.gold, BATTLE_STARTING_GOLD);
     assert_eq!(run.draft.shop.len(), BATTLE_SHOP_SIZE);
     assert_eq!(run.health, BATTLE_RUN_HEALTH);
-    assert_eq!(run.defenders.len(), BATTLE_RUN_ROUNDS);
+    assert_eq!(run.opponents.len(), 3);
 }
 
 #[test]
@@ -139,7 +170,22 @@ fn run_should_use_definition_run_config() {
         health: 5,
         loss_health_damage: 2,
         win_gold_reward: 4,
-        defender_rounds: 2,
+        opponent_rounds: vec![
+            BattleOpponentRound {
+                name: "Round 1".to_string(),
+                defender: team(TeamSide::Defender, "One", vec![chimera("One", 0, 1, 2)]),
+                win_gold_reward: 4,
+                loss_health_damage: 2,
+                is_boss: false,
+            },
+            BattleOpponentRound {
+                name: "Round 2".to_string(),
+                defender: team(TeamSide::Defender, "Two", vec![chimera("Two", 0, 1, 2)]),
+                win_gold_reward: 4,
+                loss_health_damage: 2,
+                is_boss: true,
+            },
+        ],
         shop_pool: BattleRunConfig::default().shop_pool,
     };
 
@@ -151,7 +197,53 @@ fn run_should_use_definition_run_config() {
     assert_eq!(run.draft.active_team_limit, 3);
     assert_eq!(run.loss_health_damage, 2);
     assert_eq!(run.win_gold_reward, 4);
-    assert_eq!(run.defenders.len(), 2);
+    assert_eq!(run.opponents.len(), 2);
+}
+
+#[test]
+fn run_should_use_configured_opponent_rounds() {
+    let mut definition = battle_definition();
+    definition.run.opponent_rounds = vec![
+        BattleOpponentRound {
+            name: "Qualifier".to_string(),
+            defender: team(
+                TeamSide::Defender,
+                "Qualifier Defender",
+                vec![chimera("Weak", 0, 1, 2)],
+            ),
+            win_gold_reward: 7,
+            loss_health_damage: 1,
+            is_boss: false,
+        },
+        BattleOpponentRound {
+            name: "Final".to_string(),
+            defender: team(
+                TeamSide::Defender,
+                "Final Defender",
+                vec![chimera("Boss", 0, 2, 3)],
+            ),
+            win_gold_reward: 9,
+            loss_health_damage: 2,
+            is_boss: true,
+        },
+    ];
+
+    let mut run = BattleRunState::from_definition(definition);
+
+    assert_eq!(run.opponents.len(), 2);
+    assert_eq!(run.current_opponent().unwrap().name, "Qualifier");
+    assert!(!run.current_opponent().unwrap().is_boss);
+
+    run.start_battle().unwrap();
+    assert_eq!(
+        run.battle.as_ref().map(|battle| battle.name.as_str()),
+        Some("Battle 1 - Qualifier")
+    );
+    let (_step, _outcome) = run.step().unwrap();
+
+    assert_eq!(run.draft.gold, BATTLE_STARTING_GOLD + 7);
+    assert_eq!(run.current_opponent().unwrap().name, "Final");
+    assert!(run.current_opponent().unwrap().is_boss);
 }
 
 #[test]
@@ -204,13 +296,14 @@ fn run_should_reward_win_and_return_to_draft_when_defenders_remain() {
 #[test]
 fn run_should_finish_after_final_defender_is_defeated() {
     let mut run = BattleRunState::from_definition(battle_definition());
-    run.defenders.truncate(1);
+    run.opponents.truncate(1);
     run.start_battle().unwrap();
 
     let (_step, _outcome) = run.step().unwrap();
 
     assert_eq!(run.wins, 1);
     assert_eq!(run.phase, BattleRunPhase::Complete);
+    assert_eq!(run.result, Some(BattleRunResult::Victory));
 }
 
 #[test]
@@ -242,4 +335,5 @@ fn run_should_complete_when_health_reaches_zero() {
 
     assert_eq!(run.health, 0);
     assert_eq!(run.phase, BattleRunPhase::Complete);
+    assert_eq!(run.result, Some(BattleRunResult::Defeat));
 }

@@ -19,7 +19,91 @@
         health: 3,
         loss_health_damage: 1,
         win_gold_reward: 3,
-        defender_rounds: 3,
+        opponent_rounds: [
+            (
+                name: "Opening Match",
+                win_gold_reward: Some(3),
+                loss_health_damage: Some(1),
+                defender: (
+                    name: "Opening Defender",
+                    chimeras: [
+                        (
+                            name: "Tough Cookie",
+                            attack: 2,
+                            hp: 10,
+                            abilities: ["tough_cookie", "summon_trainer"],
+                        ),
+                        (
+                            name: "Pressure Monster",
+                            attack: 4,
+                            hp: 5,
+                        ),
+                        (
+                            name: "Little Villain",
+                            attack: 1,
+                            hp: 2,
+                            abilities: ["little_villain"],
+                        ),
+                    ],
+                ),
+            ),
+            (
+                name: "Elite Match",
+                win_gold_reward: Some(4),
+                loss_health_damage: Some(1),
+                defender: (
+                    name: "Elite Defender",
+                    chimeras: [
+                        (
+                            name: "Tough Cookie",
+                            attack: 3,
+                            hp: 11,
+                            abilities: ["tough_cookie", "summon_trainer"],
+                        ),
+                        (
+                            name: "Ruthless Demon",
+                            attack: 4,
+                            hp: 7,
+                            abilities: ["ruthless_demon"],
+                        ),
+                        (
+                            name: "Pressure Monster",
+                            attack: 4,
+                            hp: 6,
+                        ),
+                    ],
+                ),
+            ),
+            (
+                name: "Final Match",
+                win_gold_reward: Some(5),
+                loss_health_damage: Some(2),
+                is_boss: true,
+                defender: (
+                    name: "Final Defender",
+                    chimeras: [
+                        (
+                            name: "Tough Cookie",
+                            attack: 3,
+                            hp: 12,
+                            abilities: ["tough_cookie", "summon_trainer"],
+                        ),
+                        (
+                            name: "Ruthless Demon",
+                            attack: 5,
+                            hp: 8,
+                            abilities: ["ruthless_demon"],
+                        ),
+                        (
+                            name: "Little Villain",
+                            attack: 2,
+                            hp: 3,
+                            abilities: ["little_villain"],
+                        ),
+                    ],
+                ),
+            ),
+        ],
         shop_pool: [
             (
                 name: "Workaholic",

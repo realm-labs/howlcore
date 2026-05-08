@@ -18,10 +18,11 @@ pub use draft::{
 pub use event::{BattleEvent, BattleOutcome};
 pub use model::{
     BattleChimera, BattleChimeraId, BattleDefinition, BattleLeader, BattleLeaderEffect,
-    BattleRarity, BattleRng, BattleRunConfig, BattleState, BattleStats, BattleTeam, TeamSide,
+    BattleOpponentRound, BattleRarity, BattleRng, BattleRunConfig, BattleState, BattleStats,
+    BattleTeam, TeamSide,
 };
 pub use run::{
-    BATTLE_LOSS_HEALTH_DAMAGE, BATTLE_RUN_HEALTH, BATTLE_RUN_ROUNDS, BATTLE_SHOP_SIZE,
-    BATTLE_STARTING_GOLD, BATTLE_WIN_GOLD_REWARD, BattleRunError, BattleRunPhase, BattleRunState,
+    BATTLE_LOSS_HEALTH_DAMAGE, BATTLE_RUN_HEALTH, BATTLE_SHOP_SIZE, BATTLE_STARTING_GOLD,
+    BATTLE_WIN_GOLD_REWARD, BattleRunError, BattleRunPhase, BattleRunResult, BattleRunState,
     BattleRunStep,
 };
