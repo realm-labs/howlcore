@@ -10,7 +10,7 @@ use crate::{
             BattleRunStep, BattleShopItem, BattleState, PurchaseOutcome, TeamSide,
             resolver::front_chimera_id,
         },
-        work::{CombatState, StageDefinition},
+        work::{CombatState, StageDefinition, WorkRunPhase, WorkRunState},
     },
 };
 
@@ -19,7 +19,7 @@ struct GameplayResource {
     mode: AppMode,
     work_definition: StageDefinition,
     battle_definition: BattleDefinition,
-    work: CombatState,
+    work: WorkRunState,
     battle: BattleRunState,
 }
 
@@ -53,7 +53,7 @@ pub fn build_app(stage: StageDefinition, battle: BattleDefinition) -> App {
     let battle_logs = battle.initial_logs.clone();
     let gameplay = GameplayResource {
         mode: AppMode::WorkAssignment,
-        work: CombatState::from_stage(stage.clone()),
+        work: WorkRunState::from_stage(stage.clone()),
         battle: BattleRunState::from_definition(battle.clone()),
         work_definition: stage,
         battle_definition: battle,
@@ -147,7 +147,7 @@ fn setup_ui_system(mut commands: Commands) {
                 spawn_panel(columns, "Log", 0.9, 0.82, 0.72, LogText);
             });
             root.spawn(TextBundle::from_section(
-                "Tab: switch mode    Space: advance/start battle    1-3: buy    R: refresh shop    Q/W/E: swap lineup    B/V: bench/deploy    Z: equip    N: reset    Up/Down/Page: scroll log    End: latest    Esc: quit",
+                "Tab: switch mode    Space: advance/start battle    1-3: buy    R: refresh shop    Q/W/E: swap lineup    B/V: bench/deploy    Z/X: equip/unequip    N: reset    Up/Down/Page: scroll log    End: latest    Esc: quit",
                 TextStyle {
                     font_size: 16.0,
                     color: Color::srgb(0.58, 0.62, 0.66),
@@ -233,7 +233,7 @@ fn handle_input_system(
     if keys.just_pressed(KeyCode::Space) {
         match gameplay.mode {
             AppMode::WorkAssignment => {
-                let outcome = gameplay.work.step_round();
+                let outcome = gameplay.work.step();
                 let was_following = logs.work_offset == 0;
                 logs.work.extend(outcome.logs);
                 if was_following {
@@ -353,12 +353,23 @@ fn handle_battle_draft_input(
         }
         logs.battle_offset = 0;
     }
+
+    if keys.just_pressed(KeyCode::KeyX) {
+        match gameplay.battle.draft.unequip_active_item(0, 0) {
+            Ok(outcome) => logs.battle.push(format!(
+                "Draft: unequipped {} from {}.",
+                outcome.equipment_name, outcome.chimera_name
+            )),
+            Err(error) => logs.battle.push(format!("Draft unequip error: {error:?}.")),
+        }
+        logs.battle_offset = 0;
+    }
 }
 
 fn reset_active_mode(gameplay: &mut GameplayResource, logs: &mut UiLogs) {
     match gameplay.mode {
         AppMode::WorkAssignment => {
-            gameplay.work = CombatState::from_stage(gameplay.work_definition.clone());
+            gameplay.work = WorkRunState::from_stage(gameplay.work_definition.clone());
             logs.work = gameplay.work_definition.initial_logs.clone();
             logs.work.push("Work Assignment reset.".to_string());
             logs.work_offset = 0;
@@ -492,12 +503,20 @@ fn format_purchase_outcome(outcome: PurchaseOutcome) -> String {
 fn format_header(gameplay: &GameplayResource) -> String {
     match gameplay.mode {
         AppMode::WorkAssignment => {
-            let state = &gameplay.work;
+            let run = &gameplay.work;
+            let state = &run.assignment;
             format!(
-                "Work Assignment - Round {}/{}{}",
+                "Work Assignment - {:?} - Round {}/{}{}",
+                run.phase,
                 state.round,
                 state.max_round,
-                if state.is_finished { " - Finished" } else { "" }
+                if run.phase == WorkRunPhase::Complete {
+                    " - Complete"
+                } else if state.is_finished {
+                    " - Review"
+                } else {
+                    ""
+                }
             )
         }
         AppMode::ChimeraBattle => {
@@ -525,11 +544,16 @@ fn format_header(gameplay: &GameplayResource) -> String {
 fn format_score_line(gameplay: &GameplayResource) -> String {
     match gameplay.mode {
         AppMode::WorkAssignment => {
-            let state = &gameplay.work;
+            let run = &gameplay.work;
+            let state = &run.assignment;
             format!(
-                "Awoo Cookies: {} / {}    Completed Tasks: {} / {}",
+                "Rank: {}    Week: {}    Awoo Cookies: {} / {}    Total: {}    Overtime: {}    Completed Tasks: {} / {}",
+                run.current_rank,
+                run.weeks_elapsed + 1,
                 state.cookie_score,
                 state.target_cookie_score,
+                run.total_cookies,
+                run.overtime_cookies,
                 state.completed_tasks,
                 state.tasks.len()
             )
@@ -591,14 +615,14 @@ fn format_battle_score(state: &BattleState, run: &BattleRunState) -> String {
 
 fn format_chimeras(gameplay: &GameplayResource) -> String {
     match gameplay.mode {
-        AppMode::WorkAssignment => format_work_chimeras(&gameplay.work),
+        AppMode::WorkAssignment => format_work_chimeras(&gameplay.work.assignment),
         AppMode::ChimeraBattle => format_run_chimeras(&gameplay.battle),
     }
 }
 
 fn format_details(gameplay: &GameplayResource) -> String {
     match gameplay.mode {
-        AppMode::WorkAssignment => format_tasks(&gameplay.work),
+        AppMode::WorkAssignment => format_work_run_details(&gameplay.work),
         AppMode::ChimeraBattle => format_run_details(&gameplay.battle),
     }
 }
@@ -742,6 +766,35 @@ fn format_battle_chimeras(state: &BattleState) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n\n")
+}
+
+fn format_work_run_details(run: &WorkRunState) -> String {
+    let assignment = &run.assignment;
+    let period = run
+        .current_review_period()
+        .map(|period| {
+            format!(
+                "{} -> rank {} at {} cookies",
+                period.name, period.target_rank, period.required_cookie_score
+            )
+        })
+        .unwrap_or_else(|| "none".to_string());
+    let mode_detail = match run.phase {
+        WorkRunPhase::Review => format!(
+            "Review\n  Current target: {period}\n  Weeks elapsed: {}\n  Total cookies: {}",
+            run.weeks_elapsed, run.total_cookies
+        ),
+        WorkRunPhase::Overtime => format!(
+            "Overtime\n  Cycle: {}\n  Overtime cookies: {}\n  Task growth is active after every clear.",
+            run.overtime_cycle, run.overtime_cookies
+        ),
+        WorkRunPhase::Complete => format!(
+            "Complete\n  Final rank: {}\n  Total cookies: {}\n  Overtime cookies: {}",
+            run.current_rank, run.total_cookies, run.overtime_cookies
+        ),
+    };
+
+    format!("{mode_detail}\n\nTasks\n{}", format_tasks(assignment))
 }
 
 fn format_tasks(state: &CombatState) -> String {

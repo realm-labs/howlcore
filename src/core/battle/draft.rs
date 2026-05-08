@@ -7,6 +7,7 @@ use crate::core::battle::{
 pub const CHIMERA_PURCHASE_COST: i32 = 3;
 pub const EQUIPMENT_PURCHASE_COST: i32 = 2;
 pub const DEFAULT_ACTIVE_TEAM_LIMIT: usize = 4;
+pub const CHIMERA_EQUIPMENT_LIMIT: usize = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BattleChimeraOffer {
@@ -61,6 +62,7 @@ pub enum DraftError {
     ActiveLineupFull { limit: usize },
     ActiveLineupTooSmall,
     InvalidEquipmentIndex { index: usize },
+    EquipmentSlotsFull { limit: usize },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -234,6 +236,12 @@ impl DraftState {
         let equipment = self.equipment_inventory.remove(equipment_index);
         let equipment_name = equipment.name.clone();
         let chimera = &mut self.team.chimeras[team_index];
+        if chimera.equipment.len() >= CHIMERA_EQUIPMENT_LIMIT {
+            self.equipment_inventory.insert(equipment_index, equipment);
+            return Err(DraftError::EquipmentSlotsFull {
+                limit: CHIMERA_EQUIPMENT_LIMIT,
+            });
+        }
         chimera.stats.attack += equipment.attack;
         chimera.stats.max_hp += equipment.hp;
         chimera.stats.hp += equipment.hp;
@@ -241,6 +249,38 @@ impl DraftState {
         Ok(EquipOutcome {
             equipment_name,
             chimera_name: chimera.name.clone(),
+        })
+    }
+
+    pub fn unequip_active_item(
+        &mut self,
+        active_position: usize,
+        equipment_index: usize,
+    ) -> Result<EquipOutcome, DraftError> {
+        let active_indices = sorted_active_indices(&self.team);
+        let Some(&team_index) = active_indices.get(active_position) else {
+            return Err(DraftError::InvalidTeamIndex {
+                index: active_position,
+            });
+        };
+
+        let chimera = &mut self.team.chimeras[team_index];
+        if equipment_index >= chimera.equipment.len() {
+            return Err(DraftError::InvalidEquipmentIndex {
+                index: equipment_index,
+            });
+        }
+
+        let equipment = chimera.equipment.remove(equipment_index);
+        let equipment_name = equipment.name.clone();
+        chimera.stats.attack = (chimera.stats.attack - equipment.attack).max(0);
+        chimera.stats.max_hp = (chimera.stats.max_hp - equipment.hp).max(1);
+        chimera.stats.hp = (chimera.stats.hp - equipment.hp).clamp(1, chimera.stats.max_hp);
+        let chimera_name = chimera.name.clone();
+        self.equipment_inventory.push(equipment);
+        Ok(EquipOutcome {
+            equipment_name,
+            chimera_name,
         })
     }
 

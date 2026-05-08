@@ -17,6 +17,15 @@ fn equipment(name: &str) -> BattleShopItem {
     BattleShopItem::Equipment(BattleEquipmentOffer::new(name, BattleRarity::White, 1, 2))
 }
 
+fn equipment_with_stats(name: &str, attack: i32, hp: i32) -> BattleShopItem {
+    BattleShopItem::Equipment(BattleEquipmentOffer::new(
+        name,
+        BattleRarity::White,
+        attack,
+        hp,
+    ))
+}
+
 #[test]
 fn purchase_should_add_to_bench_when_active_lineup_is_full() {
     let mut draft =
@@ -134,6 +143,48 @@ fn equipment_can_be_attached_to_active_chimera() {
     assert_eq!(draft.team.chimeras[0].stats.attack, 3);
     assert_eq!(draft.team.chimeras[0].stats.max_hp, 5);
     assert_eq!(draft.team.chimeras[0].equipment.len(), 1);
+}
+
+#[test]
+fn equipment_should_reject_when_slot_is_full() {
+    let mut draft = DraftState::new(12, TeamSide::Challenger, "Draft Team");
+    draft.shop.push(offer("Tough Cookie"));
+    draft.shop.push(equipment("Training Collar"));
+    draft.shop.push(equipment("Second Collar"));
+
+    draft.purchase(0).unwrap();
+    draft.purchase(0).unwrap();
+    draft.purchase(0).unwrap();
+    draft.equip_inventory_item(0, 0).unwrap();
+
+    assert_eq!(
+        draft.equip_inventory_item(0, 0),
+        Err(DraftError::EquipmentSlotsFull { limit: 1 })
+    );
+    assert_eq!(draft.equipment_inventory.len(), 1);
+    assert_eq!(draft.team.chimeras[0].equipment.len(), 1);
+}
+
+#[test]
+fn equipped_item_can_be_removed_to_inventory() {
+    let mut draft = DraftState::new(9, TeamSide::Challenger, "Draft Team");
+    draft.shop.push(offer("Tough Cookie"));
+    draft
+        .shop
+        .push(equipment_with_stats("Training Collar", 1, 2));
+
+    draft.purchase(0).unwrap();
+    draft.purchase(0).unwrap();
+    draft.equip_inventory_item(0, 0).unwrap();
+    let outcome = draft.unequip_active_item(0, 0).unwrap();
+
+    assert_eq!(outcome.equipment_name, "Training Collar");
+    assert_eq!(outcome.chimera_name, "Tough Cookie");
+    assert_eq!(draft.equipment_inventory.len(), 1);
+    assert_eq!(draft.team.chimeras[0].equipment.len(), 0);
+    assert_eq!(draft.team.chimeras[0].stats.attack, 2);
+    assert_eq!(draft.team.chimeras[0].stats.max_hp, 3);
+    assert_eq!(draft.team.chimeras[0].stats.hp, 3);
 }
 
 #[test]

@@ -67,6 +67,31 @@ pub struct WorkTask {
     pub progress: TaskProgress,
 }
 
+#[derive(Debug, Clone)]
+pub struct WorkReviewPeriod {
+    pub name: String,
+    pub target_rank: u32,
+    pub required_cookie_score: i32,
+    pub max_round: u32,
+    pub tasks: Vec<WorkTask>,
+}
+
+#[derive(Debug, Clone)]
+pub struct WorkOvertimeConfig {
+    pub max_round: u32,
+    pub required_progress_growth: i32,
+    pub stamina_cost_growth_every: u32,
+    pub cookie_reward_growth: i32,
+    pub tasks: Vec<WorkTask>,
+}
+
+#[derive(Debug, Clone)]
+pub struct WorkRunConfig {
+    pub starting_rank: u32,
+    pub review_periods: Vec<WorkReviewPeriod>,
+    pub overtime: Option<WorkOvertimeConfig>,
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct TraitDatabase {
     pub traits: HashMap<TraitId, TraitDef>,
@@ -79,6 +104,7 @@ pub struct StageDefinition {
     pub target_cookie_score: i32,
     pub chimeras: Vec<Chimera>,
     pub tasks: Vec<WorkTask>,
+    pub run: WorkRunConfig,
     pub trait_database: TraitDatabase,
     pub initial_logs: Vec<String>,
 }
@@ -94,6 +120,16 @@ pub struct CombatState {
     pub chimeras: Vec<Chimera>,
     pub tasks: Vec<WorkTask>,
     pub trait_database: TraitDatabase,
+}
+
+impl Default for WorkRunConfig {
+    fn default() -> Self {
+        Self {
+            starting_rank: 3,
+            review_periods: Vec::new(),
+            overtime: None,
+        }
+    }
 }
 
 impl CombatState {

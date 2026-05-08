@@ -2,6 +2,7 @@ use crate::{
     content::{
         battle_config::load_test_battle_result,
         battles::{KIND_PRAISER, TOUGH_COOKIE},
+        stages::test_stage,
     },
     core::battle::{BattleRunReward, BattleTrigger},
 };
@@ -46,6 +47,16 @@ fn test_battle_should_load_from_ron_config() {
             .abilities
             .contains_key(&KIND_PRAISER)
     );
+}
+
+#[test]
+fn test_stage_should_define_review_and_overtime_run() {
+    let stage = test_stage();
+
+    assert_eq!(stage.run.starting_rank, 4);
+    assert_eq!(stage.run.review_periods.len(), 3);
+    assert_eq!(stage.run.review_periods[2].target_rank, 1);
+    assert!(stage.run.overtime.is_some());
 }
 
 #[test]

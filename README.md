@@ -22,7 +22,7 @@ cargo test
 
 The project is split into two UI-independent gameplay cores plus a Bevy debug UI:
 
-- `core::work`: single-team Work Assignment mode from The Awooo Firm style prototype.
+- `core::work`: single-team Work Assignment mode from The Awooo Firm style prototype, including a small multi-week ranking run and overtime loop.
 - `core::battle`: two-team Chimera Battle mode from the Chrysos Awoo Championship style prototype.
 - `content`: hard-coded learning content expressed as pure data.
 - `ui`: Bevy adapter that can render and advance either `core::work` or `core::battle`.
@@ -32,13 +32,17 @@ The two modes intentionally use separate models. Work mode has `efficiency`, `st
 ## Work Assignment Flow
 
 1. The app creates a test team of five chimeras.
-2. The stage creates three work tasks.
-3. Each `Space` press advances one round.
+2. `WorkRunState` starts the first review period from the stage's run config.
+3. Each `Space` press advances one work round inside the current assignment.
 4. The work queue repeatedly selects the current rightmost active chimera.
 5. A chimera checks stamina, consumes the current front task's stamina cost, resolves `OnWork` traits, then contributes base progress by efficiency.
 6. If a chimera no longer has enough stamina for its next task, it leaves the field and stops working.
 7. Completed tasks grant Awoo Cookies.
-8. The work ends when all tasks are complete, the max round count is reached, or no active chimera can work.
+8. A review period ends when all tasks are complete, the max round count is reached, or no active chimera can work.
+9. If the weekly cookie target is met, the run promotes to the configured ranking target and advances to the next review period.
+10. Reaching Rank 1 unlocks Overtime Mode.
+11. Overtime generates repeating task cycles with growing progress, stamina, and cookie tuning.
+12. Overtime carries the current stamina state between cleared cycles and ends when the team cannot fully clear a cycle.
 
 ## Chimera Battle Flow
 
@@ -98,13 +102,14 @@ Battle mode has a small draft/shop layer and run loop for building a lineup befo
 5. Each duplicate grants +1 ATK, +1 max HP, +1 current HP, and +1 experience.
 6. Level 2 costs 2 experience; Level 3 costs 3 experience.
 7. Purchased equipment enters inventory and can be equipped onto an active chimera for direct ATK/HP bonuses.
-8. Draft supports swapping active positions, moving active chimeras to the bench, and deploying benched chimeras while respecting the active lineup limit.
-9. `BattleRunState` moves from Draft to the next configured opponent round, resolves the battle, applies that round's win rewards, then returns to Draft for the next opponent.
-10. A run has explicit opponent rounds, health, win/loss counters, and completes when all opponents are defeated or health reaches zero.
-11. The shop refreshes each Draft round from the configured deterministic item pool.
-12. The debug UI supports number-key purchases from the shop pool, `R` shop refreshes, `Q/W/E` adjacent lineup swaps, `B` bench, `V` deploy, and `Z` equip.
-13. Run tuning lives in battle RON content: starting gold, health, default loss damage, shop size, active lineup limit, explicit opponent rounds, structured win rewards, and shop items.
-14. Win rewards are structured effects; the current supported rewards add gold, heal run health, or add a specific item to the shop.
+8. Each chimera currently has one equipment slot; equipment can be unequipped to return it to inventory and roll back its stats.
+9. Draft supports swapping active positions, moving active chimeras to the bench, and deploying benched chimeras while respecting the active lineup limit.
+10. `BattleRunState` moves from Draft to the next configured opponent round, resolves the battle, applies that round's win rewards, then returns to Draft for the next opponent.
+11. A run has explicit opponent rounds, health, win/loss counters, and completes when all opponents are defeated or health reaches zero.
+12. The shop refreshes each Draft round from the configured deterministic item pool.
+13. The debug UI supports number-key purchases from the shop pool, `R` shop refreshes, `Q/W/E` adjacent lineup swaps, `B` bench, `V` deploy, and `Z/X` equip/unequip.
+14. Run tuning lives in battle RON content: starting gold, health, default loss damage, shop size, active lineup limit, explicit opponent rounds, structured win rewards, and shop items.
+15. Win rewards are structured effects; the current supported rewards add gold, heal run health, or add a specific item to the shop.
 
 ## Directory Structure
 
@@ -122,6 +127,7 @@ src/
       log.rs
       model.rs
       resolver.rs
+      run.rs
     battle/
       event.rs
       model.rs
@@ -144,5 +150,6 @@ src/
 
 - Add battle abilities for knockout, richer summon rules, and level-scaled effects.
 - Add equipment, trainer pools, tag-specific leader effects, and saved defense lineups.
+- Add richer Work mode ranking boards, weekly modifiers, Alpha Chimera selection, and team adjustment between overtime cycles.
 - Move remaining hard-coded prototype tuning to RON or TOML files.
 - Add richer Bevy UI panels, animation, and replay controls.
