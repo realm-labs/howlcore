@@ -1,8 +1,8 @@
 //! Multi-week run loop for Work Assignment mode.
 
 use crate::core::work::{
-    Chimera, CombatState, RoundOutcome, StageDefinition, WorkOvertimeConfig, WorkReviewPeriod,
-    WorkTask, resolver::all_tasks_completed,
+    Chimera, CombatState, RoundOutcome, StageDefinition, WorkAlphaConfig, WorkOvertimeConfig,
+    WorkReviewPeriod, WorkTask, resolver::all_tasks_completed,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -17,6 +17,7 @@ pub enum WorkRunPhase {
 pub enum WorkRunError {
     InvalidPhase,
     InvalidChimeraPosition { index: usize },
+    InvalidAlphaIndex { index: usize },
     ActiveLineupTooSmall,
     ExhaustedChimera,
 }
@@ -32,6 +33,8 @@ pub struct WorkRunState {
     pub current_rank: u32,
     pub total_cookies: i32,
     pub overtime: Option<WorkOvertimeConfig>,
+    pub alpha_options: Vec<WorkAlphaConfig>,
+    pub selected_alpha: Option<usize>,
     pub overtime_cycle: u32,
     pub overtime_cookies: i32,
     base_chimeras: Vec<Chimera>,
@@ -71,6 +74,8 @@ impl WorkRunState {
             current_rank: stage.run.starting_rank,
             total_cookies: 0,
             overtime: stage.run.overtime,
+            alpha_options: stage.run.alpha_options,
+            selected_alpha: None,
             overtime_cycle: 0,
             overtime_cookies: 0,
             base_chimeras: stage.chimeras,
@@ -79,6 +84,7 @@ impl WorkRunState {
         if run.review_periods.is_empty() && run.overtime.is_some() {
             run.start_overtime_cycle(None);
         }
+        run.apply_selected_alpha();
 
         run
     }
@@ -109,6 +115,28 @@ impl WorkRunState {
 
     pub fn current_review_period(&self) -> Option<&WorkReviewPeriod> {
         self.review_periods.get(self.current_period)
+    }
+
+    pub fn selected_alpha(&self) -> Option<&WorkAlphaConfig> {
+        self.selected_alpha
+            .and_then(|index| self.alpha_options.get(index))
+    }
+
+    pub fn select_alpha(&mut self, index: usize) -> Result<String, WorkRunError> {
+        if !matches!(
+            self.phase,
+            WorkRunPhase::Review | WorkRunPhase::OvertimePrep
+        ) {
+            return Err(WorkRunError::InvalidPhase);
+        }
+        let Some(alpha) = self.alpha_options.get(index) else {
+            return Err(WorkRunError::InvalidAlphaIndex { index });
+        };
+
+        self.selected_alpha = Some(index);
+        let alpha_name = alpha.name.clone();
+        self.apply_selected_alpha();
+        Ok(alpha_name)
     }
 
     fn resolve_finished_assignment(&mut self, outcome: &mut RoundOutcome) {
@@ -208,6 +236,7 @@ impl WorkRunState {
         self.assignment.is_finished = false;
         self.assignment.chimeras = self.base_chimeras.clone();
         self.assignment.tasks = period.tasks;
+        self.apply_selected_alpha();
     }
 
     fn start_overtime_cycle(&mut self, chimeras: Option<Vec<Chimera>>) {
@@ -231,6 +260,7 @@ impl WorkRunState {
         self.assignment.is_finished = false;
         self.assignment.chimeras = chimeras.unwrap_or_else(|| self.base_chimeras.clone());
         self.assignment.tasks = scale_overtime_tasks(&overtime, self.overtime_cycle);
+        self.apply_selected_alpha();
     }
 
     pub fn swap_overtime_positions(
@@ -346,6 +376,26 @@ impl WorkRunState {
                 .map(|task| task.progress.stamina_cost)
                 .min()
         })
+    }
+
+    fn apply_selected_alpha(&mut self) {
+        let Some(alpha) = self.selected_alpha() else {
+            return;
+        };
+        let trait_id = alpha.trait_id;
+        let chimera_name = alpha.chimera_name.clone();
+
+        for chimera in &mut self.assignment.chimeras {
+            chimera.traits.retain(|trait_id| {
+                !self
+                    .alpha_options
+                    .iter()
+                    .any(|alpha| alpha.trait_id == *trait_id)
+            });
+            if chimera.name == chimera_name && !chimera.traits.contains(&trait_id) {
+                chimera.traits.push(trait_id);
+            }
+        }
     }
 }
 

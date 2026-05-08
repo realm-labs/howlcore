@@ -279,6 +279,22 @@ fn handle_work_prep_input(
     gameplay: &mut GameplayResource,
     logs: &mut UiLogs,
 ) {
+    if gameplay.work.phase == WorkRunPhase::Review {
+        for (key, index) in [
+            (KeyCode::Digit1, 0),
+            (KeyCode::Digit2, 1),
+            (KeyCode::Digit3, 2),
+        ] {
+            if keys.just_pressed(key) {
+                match gameplay.work.select_alpha(index) {
+                    Ok(alpha_name) => logs.work.push(format!("Work run: selected {alpha_name}.")),
+                    Err(error) => logs.work.push(format!("Alpha selection error: {error:?}.")),
+                }
+                logs.work_offset = 0;
+            }
+        }
+    }
+
     if gameplay.work.phase != WorkRunPhase::OvertimePrep {
         return;
     }
@@ -834,16 +850,22 @@ fn format_work_run_details(run: &WorkRunState) -> String {
         .unwrap_or_else(|| "none".to_string());
     let mode_detail = match run.phase {
         WorkRunPhase::Review => format!(
-            "Review\n  Current target: {period}\n  Weeks elapsed: {}\n  Total cookies: {}",
-            run.weeks_elapsed, run.total_cookies
+            "Review\n  Current target: {period}\n  Weeks elapsed: {}\n  Total cookies: {}\n\nAlpha Chimera\n{}",
+            run.weeks_elapsed,
+            run.total_cookies,
+            format_work_alpha_options(run)
         ),
         WorkRunPhase::Overtime => format!(
-            "Overtime\n  Cycle: {}\n  Overtime cookies: {}\n  Task growth is active after every clear.",
-            run.overtime_cycle, run.overtime_cookies
+            "Overtime\n  Cycle: {}\n  Overtime cookies: {}\n  Alpha: {}\n  Task growth is active after every clear.",
+            run.overtime_cycle,
+            run.overtime_cookies,
+            selected_work_alpha_name(run)
         ),
         WorkRunPhase::OvertimePrep => format!(
-            "Overtime Prep\n  Completed cycle: {}\n  Overtime cookies: {}\n  Q/W/E: swap adjacent chimeras\n  1-5: toggle active workers\n  Space: start next cycle",
-            run.overtime_cycle, run.overtime_cookies
+            "Overtime Prep\n  Completed cycle: {}\n  Overtime cookies: {}\n  Alpha: {}\n  Q/W/E: swap adjacent chimeras\n  1-5: toggle active workers\n  Space: start next cycle",
+            run.overtime_cycle,
+            run.overtime_cookies,
+            selected_work_alpha_name(run)
         ),
         WorkRunPhase::Complete => format!(
             "Complete\n  Final rank: {}\n  Total cookies: {}\n  Overtime cookies: {}",
@@ -852,6 +874,37 @@ fn format_work_run_details(run: &WorkRunState) -> String {
     };
 
     format!("{mode_detail}\n\nTasks\n{}", format_tasks(assignment))
+}
+
+fn format_work_alpha_options(run: &WorkRunState) -> String {
+    if run.alpha_options.is_empty() {
+        return "  none".to_string();
+    }
+
+    run.alpha_options
+        .iter()
+        .enumerate()
+        .map(|(index, alpha)| {
+            let marker = if run.selected_alpha == Some(index) {
+                "*"
+            } else {
+                " "
+            };
+            format!(
+                "{marker} {}. {} -> {}",
+                index + 1,
+                alpha.name,
+                alpha.chimera_name
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn selected_work_alpha_name(run: &WorkRunState) -> &str {
+    run.selected_alpha()
+        .map(|alpha| alpha.name.as_str())
+        .unwrap_or("None")
 }
 
 fn format_tasks(state: &CombatState) -> String {

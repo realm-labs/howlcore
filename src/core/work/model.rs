@@ -67,6 +67,13 @@ pub struct WorkTask {
     pub progress: TaskProgress,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkAlphaConfig {
+    pub name: String,
+    pub chimera_name: String,
+    pub trait_id: TraitId,
+}
+
 #[derive(Debug, Clone)]
 pub struct WorkReviewPeriod {
     pub name: String,
@@ -90,6 +97,7 @@ pub struct WorkRunConfig {
     pub starting_rank: u32,
     pub review_periods: Vec<WorkReviewPeriod>,
     pub overtime: Option<WorkOvertimeConfig>,
+    pub alpha_options: Vec<WorkAlphaConfig>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -128,6 +136,7 @@ impl Default for WorkRunConfig {
             starting_rank: 3,
             review_periods: Vec::new(),
             overtime: None,
+            alpha_options: Vec::new(),
         }
     }
 }

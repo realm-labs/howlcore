@@ -56,6 +56,7 @@ fn test_stage_should_define_review_and_overtime_run() {
     assert_eq!(stage.run.starting_rank, 4);
     assert_eq!(stage.run.review_periods.len(), 3);
     assert_eq!(stage.run.review_periods[2].target_rank, 1);
+    assert_eq!(stage.run.alpha_options.len(), 2);
     assert!(stage.run.overtime.is_some());
 }
 

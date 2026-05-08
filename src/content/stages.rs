@@ -1,10 +1,10 @@
 //! Test stage content for the first work-battle prototype.
 
 use crate::{
-    content::chimeras::{test_chimeras, test_trait_database},
+    content::chimeras::{ALPHA_COORDINATION, ALPHA_MOMENTUM, test_chimeras, test_trait_database},
     core::work::{
-        StageDefinition, TaskProgress, WorkOvertimeConfig, WorkReviewPeriod, WorkRunConfig,
-        WorkTask,
+        StageDefinition, TaskProgress, WorkAlphaConfig, WorkOvertimeConfig, WorkReviewPeriod,
+        WorkRunConfig, WorkTask,
     },
 };
 
@@ -64,6 +64,18 @@ pub fn test_stage() -> StageDefinition {
                 cookie_reward_growth: 4,
                 tasks: rank_one_tasks,
             }),
+            alpha_options: vec![
+                WorkAlphaConfig {
+                    name: "Field Coordinator".to_string(),
+                    chimera_name: "Healer".to_string(),
+                    trait_id: ALPHA_COORDINATION,
+                },
+                WorkAlphaConfig {
+                    name: "Momentum Captain".to_string(),
+                    chimera_name: "Rat Race King".to_string(),
+                    trait_id: ALPHA_MOMENTUM,
+                },
+            ],
         },
         trait_database: test_trait_database(),
         initial_logs: vec![

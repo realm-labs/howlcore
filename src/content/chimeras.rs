@@ -10,6 +10,8 @@ pub const PRESSURE_BOOST: TraitId = TraitId("pressure_boost");
 pub const DURABLE_WORKER: TraitId = TraitId("durable_worker");
 pub const SOOTHING_CARE: TraitId = TraitId("soothing_care");
 pub const LEAD_THE_RACE: TraitId = TraitId("lead_the_race");
+pub const ALPHA_COORDINATION: TraitId = TraitId("alpha_coordination");
+pub const ALPHA_MOMENTUM: TraitId = TraitId("alpha_momentum");
 
 pub fn test_trait_database() -> TraitDatabase {
     let mut database = TraitDatabase::default();
@@ -51,6 +53,23 @@ pub fn test_trait_database() -> TraitDatabase {
             trigger: Trigger::OnWork,
             selector: TargetSelector::FrontTask,
             effects: vec![Effect::AdvanceTaskByEfficiency { bonus: 3 }],
+        },
+        TraitDef {
+            id: ALPHA_COORDINATION,
+            name: "Alpha Coordination",
+            trigger: Trigger::RoundStart,
+            selector: TargetSelector::AllAllies,
+            effects: vec![Effect::AddEfficiency {
+                amount: 1,
+                duration: 1,
+            }],
+        },
+        TraitDef {
+            id: ALPHA_MOMENTUM,
+            name: "Alpha Momentum",
+            trigger: Trigger::TaskCompleted,
+            selector: TargetSelector::SelfChimera,
+            effects: vec![Effect::RestoreStamina { amount: 3 }],
         },
     ];
 

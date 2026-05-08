@@ -33,17 +33,18 @@ The two modes intentionally use separate models. Work mode has `efficiency`, `st
 
 1. The app creates a test team of five chimeras.
 2. `WorkRunState` starts the first review period from the stage's run config.
-3. Each `Space` press advances one work round inside the current assignment.
-4. The work queue repeatedly selects the current rightmost active chimera.
-5. A chimera checks stamina, consumes the current front task's stamina cost, resolves `OnWork` traits, then contributes base progress by efficiency.
-6. If a chimera no longer has enough stamina for its next task, it leaves the field and stops working.
-7. Completed tasks grant Awoo Cookies.
-8. A review period ends when all tasks are complete, the max round count is reached, or no active chimera can work.
-9. If the weekly cookie target is met, the run promotes to the configured ranking target and advances to the next review period.
-10. Reaching Rank 1 unlocks Overtime Mode.
-11. Overtime generates repeating task cycles with growing progress, stamina, and cookie tuning.
-12. Clearing an overtime cycle pauses in Overtime Prep, where the player can adjust active workers or reorder the lineup before continuing.
-13. Overtime carries the current stamina state between cleared cycles and ends when the team cannot fully clear a cycle.
+3. During Review, number keys can select an Alpha Chimera option that grants a run-level trait to the named worker.
+4. Each `Space` press advances one work round inside the current assignment.
+5. The work queue repeatedly selects the current rightmost active chimera.
+6. A chimera checks stamina, consumes the current front task's stamina cost, resolves `OnWork` traits, then contributes base progress by efficiency.
+7. If a chimera no longer has enough stamina for its next task, it leaves the field and stops working.
+8. Completed tasks grant Awoo Cookies.
+9. A review period ends when all tasks are complete, the max round count is reached, or no active chimera can work.
+10. If the weekly cookie target is met, the run promotes to the configured ranking target and advances to the next review period.
+11. Reaching Rank 1 unlocks Overtime Mode.
+12. Overtime generates repeating task cycles with growing progress, stamina, and cookie tuning.
+13. Clearing an overtime cycle pauses in Overtime Prep, where the player can adjust active workers or reorder the lineup before continuing.
+14. Overtime carries the current stamina state between cleared cycles and ends when the team cannot fully clear a cycle.
 
 ## Chimera Battle Flow
 
@@ -151,6 +152,6 @@ src/
 
 - Add battle abilities for knockout, richer summon rules, and level-scaled effects.
 - Add equipment, trainer pools, tag-specific leader effects, and saved defense lineups.
-- Add richer Work mode ranking boards, weekly modifiers, Alpha Chimera selection, and team adjustment between overtime cycles.
+- Add richer Work mode ranking boards, weekly modifiers, and Alpha Chimera option pools.
 - Move remaining hard-coded prototype tuning to RON or TOML files.
 - Add richer Bevy UI panels, animation, and replay controls.

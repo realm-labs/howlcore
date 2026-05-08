@@ -1,8 +1,10 @@
 use crate::core::work::{
-    ActiveEffects, Chimera, StageDefinition, Stats, TaskProgress, TraitDatabase,
-    WorkOvertimeConfig, WorkReviewPeriod, WorkRunConfig, WorkRunError, WorkRunPhase, WorkRunState,
-    WorkTask,
+    ActiveEffects, Chimera, StageDefinition, Stats, TaskProgress, TraitDatabase, TraitId,
+    WorkAlphaConfig, WorkOvertimeConfig, WorkReviewPeriod, WorkRunConfig, WorkRunError,
+    WorkRunPhase, WorkRunState, WorkTask,
 };
+
+const ALPHA_TEST: TraitId = TraitId("alpha_test");
 
 fn chimera(stamina: i32, efficiency: i32) -> Chimera {
     Chimera {
@@ -48,6 +50,50 @@ fn stage(run: WorkRunConfig) -> StageDefinition {
     }
 }
 
+fn run_config_with_alpha() -> WorkRunConfig {
+    WorkRunConfig {
+        starting_rank: 1,
+        review_periods: Vec::new(),
+        overtime: Some(WorkOvertimeConfig {
+            max_round: 3,
+            required_progress_growth: 0,
+            stamina_cost_growth_every: 0,
+            cookie_reward_growth: 0,
+            tasks: vec![task("Overtime", 4, 2, 10)],
+        }),
+        alpha_options: vec![WorkAlphaConfig {
+            name: "Test Alpha".to_string(),
+            chimera_name: "Worker".to_string(),
+            trait_id: ALPHA_TEST,
+        }],
+    }
+}
+
+fn review_run_config_with_alpha() -> WorkRunConfig {
+    WorkRunConfig {
+        starting_rank: 2,
+        review_periods: vec![WorkReviewPeriod {
+            name: "Rank 1 Review".to_string(),
+            target_rank: 1,
+            required_cookie_score: 10,
+            max_round: 3,
+            tasks: vec![task("Review", 4, 1, 10)],
+        }],
+        overtime: Some(WorkOvertimeConfig {
+            max_round: 3,
+            required_progress_growth: 0,
+            stamina_cost_growth_every: 0,
+            cookie_reward_growth: 0,
+            tasks: vec![task("Overtime", 4, 2, 10)],
+        }),
+        alpha_options: vec![WorkAlphaConfig {
+            name: "Test Alpha".to_string(),
+            chimera_name: "Worker".to_string(),
+            trait_id: ALPHA_TEST,
+        }],
+    }
+}
+
 #[test]
 fn review_period_should_promote_rank_and_unlock_overtime() {
     let run_config = WorkRunConfig {
@@ -66,6 +112,7 @@ fn review_period_should_promote_rank_and_unlock_overtime() {
             cookie_reward_growth: 3,
             tasks: vec![task("Overtime", 4, 1, 10)],
         }),
+        alpha_options: Vec::new(),
     };
     let mut run = WorkRunState::from_stage(stage(run_config));
 
@@ -95,6 +142,7 @@ fn failed_review_period_should_retry_same_target() {
             tasks: vec![task("Too Hard", 99, 1, 10)],
         }],
         overtime: None,
+        alpha_options: Vec::new(),
     };
     let mut run = WorkRunState::from_stage(stage(run_config));
 
@@ -109,17 +157,7 @@ fn failed_review_period_should_retry_same_target() {
 
 #[test]
 fn overtime_should_carry_stamina_between_cleared_cycles() {
-    let run_config = WorkRunConfig {
-        starting_rank: 1,
-        review_periods: Vec::new(),
-        overtime: Some(WorkOvertimeConfig {
-            max_round: 3,
-            required_progress_growth: 0,
-            stamina_cost_growth_every: 0,
-            cookie_reward_growth: 0,
-            tasks: vec![task("Overtime", 4, 2, 10)],
-        }),
-    };
+    let run_config = run_config_with_alpha();
     let mut custom_stage = stage(run_config);
     custom_stage.chimeras = vec![chimera(5, 8)];
     let mut run = WorkRunState::from_stage(custom_stage);
@@ -140,17 +178,7 @@ fn overtime_should_carry_stamina_between_cleared_cycles() {
 
 #[test]
 fn overtime_prep_should_allow_reordering_before_next_cycle() {
-    let run_config = WorkRunConfig {
-        starting_rank: 1,
-        review_periods: Vec::new(),
-        overtime: Some(WorkOvertimeConfig {
-            max_round: 3,
-            required_progress_growth: 0,
-            stamina_cost_growth_every: 0,
-            cookie_reward_growth: 0,
-            tasks: vec![task("Overtime", 4, 2, 10)],
-        }),
-    };
+    let run_config = run_config_with_alpha();
     let mut custom_stage = stage(run_config);
     custom_stage.chimeras = vec![chimera(5, 8), chimera(5, 8)];
     custom_stage.chimeras[0].name = "Left".to_string();
@@ -168,17 +196,7 @@ fn overtime_prep_should_allow_reordering_before_next_cycle() {
 
 #[test]
 fn overtime_prep_should_reject_disabling_last_active_chimera() {
-    let run_config = WorkRunConfig {
-        starting_rank: 1,
-        review_periods: Vec::new(),
-        overtime: Some(WorkOvertimeConfig {
-            max_round: 3,
-            required_progress_growth: 0,
-            stamina_cost_growth_every: 0,
-            cookie_reward_growth: 0,
-            tasks: vec![task("Overtime", 4, 2, 10)],
-        }),
-    };
+    let run_config = run_config_with_alpha();
     let mut run = WorkRunState::from_stage(stage(run_config));
 
     let _ = run.step();
@@ -187,4 +205,26 @@ fn overtime_prep_should_reject_disabling_last_active_chimera() {
         run.toggle_overtime_chimera(0),
         Err(WorkRunError::ActiveLineupTooSmall)
     );
+}
+
+#[test]
+fn alpha_selection_should_add_trait_to_named_chimera() {
+    let mut run = WorkRunState::from_stage(stage(review_run_config_with_alpha()));
+
+    let alpha_name = run.select_alpha(0).unwrap();
+
+    assert_eq!(alpha_name, "Test Alpha");
+    assert_eq!(run.selected_alpha().unwrap().trait_id, ALPHA_TEST);
+    assert!(run.assignment.chimeras[0].traits.contains(&ALPHA_TEST));
+}
+
+#[test]
+fn alpha_selection_should_persist_into_next_overtime_cycle() {
+    let mut run = WorkRunState::from_stage(stage(review_run_config_with_alpha()));
+    run.select_alpha(0).unwrap();
+
+    let _ = run.step();
+
+    assert_eq!(run.phase, WorkRunPhase::Overtime);
+    assert!(run.assignment.chimeras[0].traits.contains(&ALPHA_TEST));
 }
