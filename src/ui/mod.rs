@@ -6,13 +6,44 @@ use crate::{
     app_state::AppMode,
     core::{
         battle::{
-            BattleDefinition, BattleLeaderEffect, BattleRunPhase, BattleRunReward, BattleRunState,
-            BattleRunStep, BattleShopItem, BattleState, PurchaseOutcome, TeamSide,
+            BattleAbilityDatabase, BattleChimera, BattleDefinition, BattleEffect, BattleEvent,
+            BattleLeaderEffect, BattleOutcome, BattleRunPhase, BattleRunReward, BattleRunState,
+            BattleRunStep, BattleShopItem, BattleState, BattleTrigger, PurchaseOutcome, TeamSide,
             resolver::front_chimera_id,
         },
-        work::{CombatState, StageDefinition, WorkRunPhase, WorkRunState},
+        work::{Chimera, Effect, StageDefinition, TraitDef, Trigger, WorkRunPhase, WorkRunState},
     },
 };
+
+const ROOT_BG: Color = Color::srgb(0.07, 0.075, 0.08);
+const SURFACE: Color = Color::srgb(0.12, 0.135, 0.145);
+const SURFACE_RAISED: Color = Color::srgb(0.155, 0.17, 0.18);
+const PANEL: Color = Color::srgb(0.09, 0.1, 0.11);
+const CARD: Color = Color::srgb(0.19, 0.21, 0.22);
+const CARD_HOVERED: Color = Color::srgb(0.25, 0.28, 0.29);
+const CARD_ACTIVE: Color = Color::srgb(0.18, 0.32, 0.27);
+const CARD_ACTIVE_HOVERED: Color = Color::srgb(0.23, 0.4, 0.34);
+const CARD_SELECTED: Color = Color::srgb(0.34, 0.27, 0.15);
+const CARD_SELECTED_HOVERED: Color = Color::srgb(0.43, 0.34, 0.18);
+const CARD_DISABLED: Color = Color::srgb(0.105, 0.115, 0.12);
+const TEXT: Color = Color::srgb(0.91, 0.93, 0.92);
+const MUTED: Color = Color::srgb(0.6, 0.64, 0.65);
+const ACCENT: Color = Color::srgb(0.9, 0.66, 0.28);
+const GOOD: Color = Color::srgb(0.31, 0.74, 0.58);
+const DANGER: Color = Color::srgb(0.72, 0.28, 0.27);
+
+type ButtonInteractionQuery<'w, 's> =
+    Query<'w, 's, (&'static Interaction, &'static UiAction), (Changed<Interaction>, With<Button>)>;
+type ButtonVisualQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static Interaction,
+        &'static ButtonColors,
+        &'static mut BackgroundColor,
+    ),
+    (Changed<Interaction>, With<Button>),
+>;
 
 #[derive(Resource)]
 struct GameplayResource {
@@ -38,15 +69,35 @@ struct RoundText;
 struct ScoreText;
 
 #[derive(Component)]
-struct ChimeraText;
-
-#[derive(Component)]
-struct TaskText;
+struct BoardRoot;
 
 #[derive(Component)]
 struct LogText;
 
-const LOG_WINDOW_LINES: usize = 18;
+#[derive(Component, Clone, Copy)]
+enum UiAction {
+    SwitchMode,
+    Advance,
+    Reset,
+    SelectAlpha(usize),
+    WorkSwap(usize),
+    WorkToggle(usize),
+    BuyShop(usize),
+    RefreshShop,
+    BattleSwap(usize),
+    BenchLast,
+    DeployFirst,
+    EquipFirst,
+    UnequipFirst,
+}
+
+#[derive(Component, Clone, Copy)]
+struct ButtonColors {
+    normal: Color,
+    hovered: Color,
+}
+
+const LOG_WINDOW_LINES: usize = 24;
 
 pub fn build_app(stage: StageDefinition, battle: BattleDefinition) -> App {
     let work_logs = stage.initial_logs.clone();
@@ -63,7 +114,7 @@ pub fn build_app(stage: StageDefinition, battle: BattleDefinition) -> App {
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
         primary_window: Some(Window {
             title: "Howlcore Gameplay Debugger".to_string(),
-            resolution: (1180.0, 760.0).into(),
+            resolution: (1280.0, 820.0).into(),
             ..default()
         }),
         ..default()
@@ -80,10 +131,11 @@ pub fn build_app(stage: StageDefinition, battle: BattleDefinition) -> App {
         Update,
         (
             handle_input_system,
+            update_button_visual_system,
+            handle_ui_action_system,
             update_round_text_system,
             update_score_text_system,
-            update_chimera_text_system,
-            update_task_text_system,
+            rebuild_board_system,
             update_log_text_system,
         )
             .chain(),
@@ -101,59 +153,104 @@ fn setup_ui_system(mut commands: Commands) {
                 width: Val::Percent(100.0),
                 height: Val::Percent(100.0),
                 flex_direction: FlexDirection::Column,
-                padding: UiRect::all(Val::Px(18.0)),
-                row_gap: Val::Px(10.0),
+                padding: UiRect::all(Val::Px(16.0)),
+                row_gap: Val::Px(12.0),
                 ..default()
             },
-            background_color: Color::srgb(0.08, 0.09, 0.1).into(),
+            background_color: ROOT_BG.into(),
             ..default()
         })
         .with_children(|root| {
-            root.spawn((
-                TextBundle::from_section(
-                    "",
-                    TextStyle {
-                        font_size: 28.0,
-                        color: Color::srgb(0.92, 0.94, 0.96),
-                        ..default()
-                    },
-                ),
-                RoundText,
-            ));
-            root.spawn((
-                TextBundle::from_section(
-                    "",
-                    TextStyle {
-                        font_size: 22.0,
-                        color: Color::srgb(0.78, 0.86, 0.94),
-                        ..default()
-                    },
-                ),
-                ScoreText,
-            ));
+            root.spawn(NodeBundle {
+                style: Style {
+                    width: Val::Percent(100.0),
+                    min_height: Val::Px(82.0),
+                    flex_direction: FlexDirection::Column,
+                    justify_content: JustifyContent::Center,
+                    padding: UiRect::axes(Val::Px(16.0), Val::Px(12.0)),
+                    row_gap: Val::Px(6.0),
+                    ..default()
+                },
+                background_color: SURFACE.into(),
+                ..default()
+            })
+            .with_children(|header| {
+                header.spawn((
+                    TextBundle::from_section(
+                        "",
+                        TextStyle {
+                            font_size: 25.0,
+                            color: TEXT,
+                            ..default()
+                        },
+                    ),
+                    RoundText,
+                ));
+                header.spawn((
+                    TextBundle::from_section(
+                        "",
+                        TextStyle {
+                            font_size: 16.0,
+                            color: MUTED,
+                            ..default()
+                        },
+                    ),
+                    ScoreText,
+                ));
+            });
             root.spawn(NodeBundle {
                 style: Style {
                     width: Val::Percent(100.0),
                     flex_grow: 1.0,
-                    column_gap: Val::Px(14.0),
+                    min_height: Val::Px(0.0),
+                    column_gap: Val::Px(12.0),
                     ..default()
                 },
                 background_color: Color::NONE.into(),
                 ..default()
             })
             .with_children(|columns| {
-                spawn_panel(columns, "Chimeras", 0.92, 0.86, 0.68, ChimeraText);
-                spawn_panel(columns, "Details", 0.72, 0.9, 0.76, TaskText);
-                spawn_panel(columns, "Log", 0.9, 0.82, 0.72, LogText);
+                columns.spawn((
+                    NodeBundle {
+                        style: Style {
+                            height: Val::Percent(100.0),
+                            flex_grow: 1.0,
+                            flex_direction: FlexDirection::Column,
+                            row_gap: Val::Px(10.0),
+                            ..default()
+                        },
+                        background_color: Color::NONE.into(),
+                        ..default()
+                    },
+                    BoardRoot,
+                ));
+                spawn_panel(columns, "Event Log", 0.9, 0.66, 0.28, LogText);
             });
-            root.spawn(TextBundle::from_section(
-                "Tab: switch mode    Space: advance/start battle    1-3: buy    R: refresh shop    Q/W/E: swap lineup    B/V: bench/deploy    Z/X: equip/unequip    N: reset    Up/Down/Page: scroll log    End: latest    Esc: quit",
-                TextStyle {
-                    font_size: 16.0,
-                    color: Color::srgb(0.58, 0.62, 0.66),
+            root.spawn(NodeBundle {
+                style: Style {
+                    width: Val::Percent(100.0),
+                    min_height: Val::Px(46.0),
+                    column_gap: Val::Px(8.0),
+                    align_items: AlignItems::Center,
+                    padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
                     ..default()
                 },
-            ));
+                background_color: SURFACE.into(),
+                ..default()
+            })
+            .with_children(|footer| {
+                spawn_button(footer, "Switch Mode", UiAction::SwitchMode, Val::Px(126.0));
+                spawn_button(footer, "Advance", UiAction::Advance, Val::Px(108.0));
+                spawn_button(footer, "Reset", UiAction::Reset, Val::Px(88.0));
+                footer.spawn(TextBundle::from_section(
+                    "Tab mode   Space advance   1-3 choose/buy   R refresh   Q/W/E swap   B/V bench/deploy   Z/X equip   Arrows/Page log   Esc quit",
+                    TextStyle {
+                        font_size: 13.0,
+                        color: MUTED,
+                        ..default()
+                    },
+                ));
+            });
         });
 }
 
@@ -168,14 +265,15 @@ fn spawn_panel<T: Component>(
     parent
         .spawn(NodeBundle {
             style: Style {
-                width: Val::Percent(33.33),
+                width: Val::Px(360.0),
                 height: Val::Percent(100.0),
                 flex_direction: FlexDirection::Column,
+                flex_shrink: 0.0,
                 padding: UiRect::all(Val::Px(12.0)),
-                row_gap: Val::Px(8.0),
+                row_gap: Val::Px(10.0),
                 ..default()
             },
-            background_color: Color::srgb(0.13, 0.15, 0.17).into(),
+            background_color: SURFACE.into(),
             ..default()
         })
         .with_children(|panel| {
@@ -191,16 +289,50 @@ fn spawn_panel<T: Component>(
                 TextBundle::from_section(
                     "",
                     TextStyle {
-                        font_size: 17.0,
-                        color: Color::srgb(0.86, 0.89, 0.91),
+                        font_size: 14.0,
+                        color: TEXT,
                         ..default()
                     },
                 )
                 .with_style(Style {
                     width: Val::Percent(100.0),
+                    flex_grow: 1.0,
                     ..default()
                 }),
                 marker,
+            ));
+        });
+}
+
+fn spawn_button(parent: &mut ChildBuilder, label: &str, action: UiAction, width: Val) {
+    parent
+        .spawn((
+            ButtonBundle {
+                style: Style {
+                    width,
+                    height: Val::Px(36.0),
+                    align_items: AlignItems::Center,
+                    justify_content: JustifyContent::Center,
+                    padding: UiRect::horizontal(Val::Px(12.0)),
+                    ..default()
+                },
+                background_color: SURFACE_RAISED.into(),
+                ..default()
+            },
+            action,
+            ButtonColors {
+                normal: SURFACE_RAISED,
+                hovered: CARD_HOVERED,
+            },
+        ))
+        .with_children(|button| {
+            button.spawn(TextBundle::from_section(
+                label,
+                TextStyle {
+                    font_size: 14.0,
+                    color: TEXT,
+                    ..default()
+                },
             ));
         });
 }
@@ -233,32 +365,7 @@ fn handle_input_system(
     }
 
     if keys.just_pressed(KeyCode::Space) {
-        match gameplay.mode {
-            AppMode::WorkAssignment => {
-                let outcome = gameplay.work.step();
-                let was_following = logs.work_offset == 0;
-                logs.work.extend(outcome.logs);
-                if was_following {
-                    logs.work_offset = 0;
-                }
-            }
-            AppMode::ChimeraBattle => {
-                let step_result = gameplay.battle.step();
-                let was_following = logs.battle_offset == 0;
-                match step_result {
-                    Ok((step, outcome)) => {
-                        logs.battle.extend(format_battle_run_step(step));
-                        logs.battle.extend(outcome.logs);
-                    }
-                    Err(error) => {
-                        logs.battle.push(format!("Battle run error: {error:?}."));
-                    }
-                }
-                if was_following {
-                    logs.battle_offset = 0;
-                }
-            }
-        }
+        advance_active_mode(&mut gameplay, &mut logs);
     }
 
     let scroll_delta = log_scroll_delta(&keys);
@@ -270,6 +377,179 @@ fn handle_input_system(
         match gameplay.mode {
             AppMode::WorkAssignment => logs.work_offset = 0,
             AppMode::ChimeraBattle => logs.battle_offset = 0,
+        }
+    }
+}
+
+fn handle_ui_action_system(
+    mut interactions: ButtonInteractionQuery,
+    mut gameplay: ResMut<GameplayResource>,
+    mut logs: ResMut<UiLogs>,
+) {
+    for (interaction, action) in &mut interactions {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+
+        match *action {
+            UiAction::SwitchMode => {
+                gameplay.mode = match gameplay.mode {
+                    AppMode::WorkAssignment => AppMode::ChimeraBattle,
+                    AppMode::ChimeraBattle => AppMode::WorkAssignment,
+                };
+            }
+            UiAction::Advance => advance_active_mode(&mut gameplay, &mut logs),
+            UiAction::Reset => reset_active_mode(&mut gameplay, &mut logs),
+            UiAction::SelectAlpha(index) => {
+                match gameplay.work.select_alpha(index) {
+                    Ok(alpha_name) => logs.work.push(format!("Work run: selected {alpha_name}.")),
+                    Err(error) => logs.work.push(format!("Alpha selection error: {error:?}.")),
+                }
+                logs.work_offset = 0;
+            }
+            UiAction::WorkSwap(left_position) => {
+                match gameplay
+                    .work
+                    .swap_overtime_positions(left_position, left_position + 1)
+                {
+                    Ok(()) => logs.work.push(format!(
+                        "Overtime prep: swapped positions {} and {}.",
+                        left_position + 1,
+                        left_position + 2
+                    )),
+                    Err(error) => logs
+                        .work
+                        .push(format!("Overtime prep swap error: {error:?}.")),
+                }
+                logs.work_offset = 0;
+            }
+            UiAction::WorkToggle(position) => {
+                match gameplay.work.toggle_overtime_chimera(position) {
+                    Ok(chimera_name) => logs
+                        .work
+                        .push(format!("Overtime prep: toggled {chimera_name}.")),
+                    Err(error) => logs
+                        .work
+                        .push(format!("Overtime prep toggle error: {error:?}.")),
+                }
+                logs.work_offset = 0;
+            }
+            UiAction::BuyShop(index) => {
+                match gameplay.battle.draft.purchase(index) {
+                    Ok(outcome) => logs.battle.push(format_purchase_outcome(outcome)),
+                    Err(error) => logs
+                        .battle
+                        .push(format!("Draft purchase error: {error:?}.")),
+                }
+                logs.battle_offset = 0;
+            }
+            UiAction::RefreshShop => {
+                match gameplay.battle.refresh_shop() {
+                    Ok(()) => logs.battle.push("Draft: refreshed shop.".to_string()),
+                    Err(error) => logs.battle.push(format!("Draft refresh error: {error:?}.")),
+                }
+                logs.battle_offset = 0;
+            }
+            UiAction::BattleSwap(left_position) => {
+                match gameplay
+                    .battle
+                    .draft
+                    .swap_active_positions(left_position, left_position + 1)
+                {
+                    Ok(()) => logs.battle.push(format!(
+                        "Draft: swapped active positions {} and {}.",
+                        left_position + 1,
+                        left_position + 2
+                    )),
+                    Err(error) => logs.battle.push(format!("Draft swap error: {error:?}.")),
+                }
+                logs.battle_offset = 0;
+            }
+            UiAction::BenchLast => {
+                let last_position = gameplay.battle.draft.team.chimeras.len().saturating_sub(1);
+                match gameplay.battle.draft.send_active_to_bench(last_position) {
+                    Ok(chimera_name) => logs
+                        .battle
+                        .push(format!("Draft: moved {chimera_name} to bench.")),
+                    Err(error) => logs.battle.push(format!("Draft bench error: {error:?}.")),
+                }
+                logs.battle_offset = 0;
+            }
+            UiAction::DeployFirst => {
+                match gameplay.battle.draft.deploy_from_bench(0) {
+                    Ok(chimera_name) => logs
+                        .battle
+                        .push(format!("Draft: deployed {chimera_name} from bench.")),
+                    Err(error) => logs.battle.push(format!("Draft deploy error: {error:?}.")),
+                }
+                logs.battle_offset = 0;
+            }
+            UiAction::EquipFirst => {
+                match gameplay.battle.draft.equip_inventory_item(0, 0) {
+                    Ok(outcome) => logs.battle.push(format!(
+                        "Draft: equipped {} on {}.",
+                        outcome.equipment_name, outcome.chimera_name
+                    )),
+                    Err(error) => logs.battle.push(format!("Draft equip error: {error:?}.")),
+                }
+                logs.battle_offset = 0;
+            }
+            UiAction::UnequipFirst => {
+                match gameplay.battle.draft.unequip_active_item(0, 0) {
+                    Ok(outcome) => logs.battle.push(format!(
+                        "Draft: unequipped {} from {}.",
+                        outcome.equipment_name, outcome.chimera_name
+                    )),
+                    Err(error) => logs.battle.push(format!("Draft unequip error: {error:?}.")),
+                }
+                logs.battle_offset = 0;
+            }
+        }
+    }
+}
+
+fn update_button_visual_system(mut interactions: ButtonVisualQuery) {
+    for (interaction, colors, mut background) in &mut interactions {
+        background.0 = match *interaction {
+            Interaction::Hovered | Interaction::Pressed => colors.hovered,
+            Interaction::None => colors.normal,
+        };
+    }
+}
+
+fn advance_active_mode(gameplay: &mut GameplayResource, logs: &mut UiLogs) {
+    match gameplay.mode {
+        AppMode::WorkAssignment => {
+            let outcome = gameplay.work.step();
+            let was_following = logs.work_offset == 0;
+            logs.work.extend(outcome.logs);
+            if was_following {
+                logs.work_offset = 0;
+            }
+        }
+        AppMode::ChimeraBattle => {
+            let previous_battle = gameplay.battle.battle.clone();
+            let step_result = gameplay.battle.step();
+            let was_following = logs.battle_offset == 0;
+            match step_result {
+                Ok((step, outcome)) => {
+                    let trigger_lines = format_battle_trigger_events(
+                        &outcome,
+                        previous_battle.as_ref(),
+                        gameplay.battle.battle.as_ref(),
+                        &gameplay.battle.ability_database,
+                    );
+                    logs.battle.extend(format_battle_run_step(step));
+                    logs.battle.extend(trigger_lines);
+                    logs.battle.extend(outcome.logs);
+                }
+                Err(error) => {
+                    logs.battle.push(format!("Battle run error: {error:?}."));
+                }
+            }
+            if was_following {
+                logs.battle_offset = 0;
+            }
         }
     }
 }
@@ -464,18 +744,26 @@ fn update_score_text_system(
     set_text(&mut score_text, format_score_line(&gameplay));
 }
 
-fn update_chimera_text_system(
+fn rebuild_board_system(
+    mut commands: Commands,
     gameplay: Res<GameplayResource>,
-    mut chimera_text: Query<&mut Text, With<ChimeraText>>,
+    board_root: Query<Entity, With<BoardRoot>>,
 ) {
-    set_text(&mut chimera_text, format_chimeras(&gameplay));
-}
+    if !gameplay.is_changed() {
+        return;
+    }
 
-fn update_task_text_system(
-    gameplay: Res<GameplayResource>,
-    mut task_text: Query<&mut Text, With<TaskText>>,
-) {
-    set_text(&mut task_text, format_details(&gameplay));
+    let Ok(root) = board_root.get_single() else {
+        return;
+    };
+
+    commands.entity(root).despawn_descendants();
+    commands
+        .entity(root)
+        .with_children(|root| match gameplay.mode {
+            AppMode::WorkAssignment => spawn_work_board(root, &gameplay.work),
+            AppMode::ChimeraBattle => spawn_battle_board(root, &gameplay.battle),
+        });
 }
 
 fn update_log_text_system(
@@ -497,6 +785,920 @@ fn update_log_text_system(
 fn set_text<T: Component>(query: &mut Query<&mut Text, With<T>>, value: String) {
     if let Ok(mut text) = query.get_single_mut() {
         text.sections[0].value = value;
+    }
+}
+
+fn spawn_work_board(parent: &mut ChildBuilder, run: &WorkRunState) {
+    spawn_board_section(parent, "Work Assignment", |section| {
+        section
+            .spawn(NodeBundle {
+                style: Style {
+                    width: Val::Percent(100.0),
+                    column_gap: Val::Px(8.0),
+                    row_gap: Val::Px(8.0),
+                    flex_wrap: FlexWrap::Wrap,
+                    ..default()
+                },
+                background_color: Color::NONE.into(),
+                ..default()
+            })
+            .with_children(|row| {
+                spawn_metric_card(
+                    row,
+                    "Mode",
+                    &format!("{:?}", run.phase),
+                    CARD,
+                    Val::Px(140.0),
+                );
+                spawn_metric_card(
+                    row,
+                    "Rank",
+                    &run.current_rank.to_string(),
+                    CARD_SELECTED,
+                    Val::Px(92.0),
+                );
+                spawn_metric_card(
+                    row,
+                    "Week",
+                    &(run.weeks_elapsed + 1).to_string(),
+                    CARD,
+                    Val::Px(92.0),
+                );
+                spawn_metric_card(
+                    row,
+                    "Cookies",
+                    &format!(
+                        "{}/{}",
+                        run.assignment.cookie_score, run.assignment.target_cookie_score
+                    ),
+                    CARD_ACTIVE,
+                    Val::Px(132.0),
+                );
+                spawn_metric_card(
+                    row,
+                    "Alpha",
+                    selected_work_alpha_name(run),
+                    CARD,
+                    Val::Px(170.0),
+                );
+            });
+    });
+
+    if run.phase == WorkRunPhase::Review && !run.alpha_options.is_empty() {
+        spawn_board_section(parent, "Alpha Chimera", |section| {
+            section
+                .spawn(NodeBundle {
+                    style: Style {
+                        width: Val::Percent(100.0),
+                        column_gap: Val::Px(8.0),
+                        row_gap: Val::Px(8.0),
+                        flex_wrap: FlexWrap::Wrap,
+                        ..default()
+                    },
+                    background_color: Color::NONE.into(),
+                    ..default()
+                })
+                .with_children(|row| {
+                    for (index, alpha) in run.alpha_options.iter().enumerate() {
+                        let label = format!("{}\n{}", alpha.name, alpha.chimera_name);
+                        let selected = run.selected_alpha == Some(index);
+                        let color = if selected { CARD_SELECTED } else { CARD };
+                        spawn_card_button(
+                            row,
+                            &label,
+                            UiAction::SelectAlpha(index),
+                            color,
+                            hovered_card_color(color),
+                            Val::Px(170.0),
+                            Val::Px(72.0),
+                        );
+                    }
+                });
+        });
+    }
+
+    spawn_board_section(parent, "Tasks", |section| {
+        section
+            .spawn(NodeBundle {
+                style: Style {
+                    width: Val::Percent(100.0),
+                    column_gap: Val::Px(8.0),
+                    row_gap: Val::Px(8.0),
+                    flex_wrap: FlexWrap::Wrap,
+                    ..default()
+                },
+                background_color: Color::NONE.into(),
+                ..default()
+            })
+            .with_children(|row| {
+                let mut tasks = run.assignment.tasks.iter().collect::<Vec<_>>();
+                tasks.sort_by_key(|task| task.order);
+                for task in tasks {
+                    let progress = progress_fraction(task.progress.current, task.progress.required);
+                    spawn_progress_card(
+                        row,
+                        &task.name,
+                        &format!(
+                            "{}/{}  Cost {}  Reward {}",
+                            task.progress.current,
+                            task.progress.required,
+                            task.progress.stamina_cost,
+                            task.progress.cookie_reward
+                        ),
+                        progress,
+                        task.progress.completed,
+                        if task.progress.completed {
+                            CARD_DISABLED
+                        } else {
+                            CARD
+                        },
+                        Val::Px(190.0),
+                    );
+                }
+            });
+    });
+
+    spawn_board_section(parent, "Chimera Queue", |section| {
+        section
+            .spawn(NodeBundle {
+                style: Style {
+                    width: Val::Percent(100.0),
+                    column_gap: Val::Px(8.0),
+                    row_gap: Val::Px(8.0),
+                    flex_wrap: FlexWrap::Wrap,
+                    ..default()
+                },
+                background_color: Color::NONE.into(),
+                ..default()
+            })
+            .with_children(|row| {
+                let mut chimeras = run
+                    .assignment
+                    .chimeras
+                    .iter()
+                    .enumerate()
+                    .collect::<Vec<_>>();
+                chimeras.sort_by_key(|(_, chimera)| chimera.slot);
+                for (position, (_, chimera)) in chimeras.into_iter().enumerate() {
+                    let color = if !chimera.is_active {
+                        CARD_DISABLED
+                    } else if run.phase == WorkRunPhase::OvertimePrep {
+                        CARD_SELECTED
+                    } else {
+                        CARD_ACTIVE
+                    };
+                    let label = format_work_chimera_card(run, chimera);
+                    if run.phase == WorkRunPhase::OvertimePrep {
+                        spawn_card_button(
+                            row,
+                            &label,
+                            UiAction::WorkToggle(position),
+                            color,
+                            hovered_card_color(color),
+                            Val::Px(154.0),
+                            Val::Px(124.0),
+                        );
+                    } else {
+                        spawn_card(row, &label, color, Val::Px(154.0), Val::Px(124.0));
+                    }
+                }
+            });
+    });
+
+    if run.phase == WorkRunPhase::OvertimePrep {
+        spawn_board_section(parent, "Prep Controls", |section| {
+            section
+                .spawn(NodeBundle {
+                    style: Style {
+                        column_gap: Val::Px(8.0),
+                        row_gap: Val::Px(8.0),
+                        flex_wrap: FlexWrap::Wrap,
+                        ..default()
+                    },
+                    background_color: Color::NONE.into(),
+                    ..default()
+                })
+                .with_children(|row| {
+                    spawn_button(row, "Swap 1-2", UiAction::WorkSwap(0), Val::Px(110.0));
+                    spawn_button(row, "Swap 2-3", UiAction::WorkSwap(1), Val::Px(110.0));
+                    spawn_button(row, "Swap 3-4", UiAction::WorkSwap(2), Val::Px(110.0));
+                });
+        });
+    }
+}
+
+fn spawn_battle_board(parent: &mut ChildBuilder, run: &BattleRunState) {
+    match (&run.phase, &run.battle) {
+        (BattleRunPhase::Draft, _) => spawn_battle_draft_board(parent, run),
+        (BattleRunPhase::Battle, Some(state)) => spawn_battle_combat_board(parent, state),
+        (BattleRunPhase::Complete, _) => spawn_board_section(parent, "Run Complete", |section| {
+            section.spawn(TextBundle::from_section(
+                format_run_details(run),
+                TextStyle {
+                    font_size: 17.0,
+                    color: TEXT,
+                    ..default()
+                },
+            ));
+        }),
+        (BattleRunPhase::Battle, None) => {}
+    }
+}
+
+fn spawn_battle_draft_board(parent: &mut ChildBuilder, run: &BattleRunState) {
+    spawn_board_section(parent, "Draft Status", |section| {
+        let opponent = run.current_opponent();
+        section
+            .spawn(NodeBundle {
+                style: Style {
+                    width: Val::Percent(100.0),
+                    column_gap: Val::Px(8.0),
+                    row_gap: Val::Px(8.0),
+                    flex_wrap: FlexWrap::Wrap,
+                    ..default()
+                },
+                background_color: Color::NONE.into(),
+                ..default()
+            })
+            .with_children(|row| {
+                spawn_metric_card(row, "Leader", leader_name(run), CARD, Val::Px(150.0));
+                spawn_metric_card(
+                    row,
+                    "Health",
+                    &format!("{}/{}", run.health, run.max_health),
+                    health_status_color(run.health, run.max_health),
+                    Val::Px(105.0),
+                );
+                spawn_metric_card(
+                    row,
+                    "Gold",
+                    &run.draft.gold.to_string(),
+                    CARD_SELECTED,
+                    Val::Px(90.0),
+                );
+                spawn_metric_card(
+                    row,
+                    "Next",
+                    opponent
+                        .map(|opponent| opponent.name.as_str())
+                        .unwrap_or("None"),
+                    CARD,
+                    Val::Px(170.0),
+                );
+                spawn_metric_card(
+                    row,
+                    "Reward",
+                    &opponent
+                        .map(|opponent| format_win_rewards(&opponent.win_rewards))
+                        .unwrap_or_else(|| "none".to_string()),
+                    CARD,
+                    Val::Px(190.0),
+                );
+            });
+    });
+
+    spawn_board_section(parent, "Active Lineup", |section| {
+        section
+            .spawn(NodeBundle {
+                style: Style {
+                    column_gap: Val::Px(8.0),
+                    row_gap: Val::Px(8.0),
+                    flex_wrap: FlexWrap::Wrap,
+                    ..default()
+                },
+                background_color: Color::NONE.into(),
+                ..default()
+            })
+            .with_children(|row| {
+                let mut chimeras = run.draft.team.chimeras.iter().collect::<Vec<_>>();
+                chimeras.sort_by_key(|chimera| chimera.slot);
+                for chimera in chimeras {
+                    let equipment = if chimera.equipment.is_empty() {
+                        "Eq none".to_string()
+                    } else {
+                        format!("Eq {}", chimera.equipment[0].name)
+                    };
+                    spawn_card(
+                        row,
+                        &format_battle_chimera_card(
+                            chimera,
+                            &run.ability_database,
+                            Some(&equipment),
+                        ),
+                        CARD_ACTIVE,
+                        Val::Px(172.0),
+                        Val::Px(162.0),
+                    );
+                }
+            });
+    });
+
+    spawn_board_section(parent, "Shop", |section| {
+        section
+            .spawn(NodeBundle {
+                style: Style {
+                    column_gap: Val::Px(8.0),
+                    row_gap: Val::Px(8.0),
+                    flex_wrap: FlexWrap::Wrap,
+                    ..default()
+                },
+                background_color: Color::NONE.into(),
+                ..default()
+            })
+            .with_children(|row| {
+                for (index, item) in run.draft.shop.iter().enumerate() {
+                    spawn_card_button(
+                        row,
+                        &format_shop_card_item(item, &run.ability_database),
+                        UiAction::BuyShop(index),
+                        CARD,
+                        CARD_HOVERED,
+                        Val::Px(196.0),
+                        Val::Px(148.0),
+                    );
+                }
+                spawn_button(row, "Refresh", UiAction::RefreshShop, Val::Px(105.0));
+            });
+    });
+
+    spawn_board_section(parent, "Bench and Equipment", |section| {
+        section
+            .spawn(NodeBundle {
+                style: Style {
+                    column_gap: Val::Px(8.0),
+                    row_gap: Val::Px(8.0),
+                    flex_wrap: FlexWrap::Wrap,
+                    ..default()
+                },
+                background_color: Color::NONE.into(),
+                ..default()
+            })
+            .with_children(|row| {
+                spawn_button(row, "Swap 1-2", UiAction::BattleSwap(0), Val::Px(110.0));
+                spawn_button(row, "Swap 2-3", UiAction::BattleSwap(1), Val::Px(110.0));
+                spawn_button(row, "Bench Last", UiAction::BenchLast, Val::Px(110.0));
+                spawn_button(row, "Deploy", UiAction::DeployFirst, Val::Px(92.0));
+                spawn_button(row, "Equip", UiAction::EquipFirst, Val::Px(84.0));
+                spawn_button(row, "Unequip", UiAction::UnequipFirst, Val::Px(100.0));
+            });
+
+        spawn_inventory_summary(section, run);
+    });
+}
+
+fn spawn_battle_combat_board(parent: &mut ChildBuilder, state: &BattleState) {
+    spawn_battle_team_row(parent, state, TeamSide::Defender, "Defender");
+    spawn_board_section(parent, "Front Exchange", |section| {
+        let challenger_front = front_chimera_id(state, TeamSide::Challenger)
+            .and_then(|id| state.chimera(id))
+            .map(|chimera| chimera.name.as_str())
+            .unwrap_or("None");
+        let defender_front = front_chimera_id(state, TeamSide::Defender)
+            .and_then(|id| state.chimera(id))
+            .map(|chimera| chimera.name.as_str())
+            .unwrap_or("None");
+        section
+            .spawn(NodeBundle {
+                style: Style {
+                    column_gap: Val::Px(12.0),
+                    row_gap: Val::Px(8.0),
+                    align_items: AlignItems::Center,
+                    flex_wrap: FlexWrap::Wrap,
+                    ..default()
+                },
+                background_color: Color::NONE.into(),
+                ..default()
+            })
+            .with_children(|row| {
+                spawn_metric_card(
+                    row,
+                    "Defender Front",
+                    defender_front,
+                    CARD_SELECTED,
+                    Val::Px(190.0),
+                );
+                row.spawn(TextBundle::from_section(
+                    "vs",
+                    TextStyle {
+                        font_size: 26.0,
+                        color: ACCENT,
+                        ..default()
+                    },
+                ));
+                spawn_metric_card(
+                    row,
+                    "Challenger Front",
+                    challenger_front,
+                    CARD_SELECTED,
+                    Val::Px(190.0),
+                );
+            });
+    });
+    spawn_battle_team_row(parent, state, TeamSide::Challenger, "Challenger");
+}
+
+fn spawn_battle_team_row(
+    parent: &mut ChildBuilder,
+    state: &BattleState,
+    side: TeamSide,
+    title: &str,
+) {
+    let front = front_chimera_id(state, side);
+    spawn_board_section(parent, title, |section| {
+        section
+            .spawn(NodeBundle {
+                style: Style {
+                    column_gap: Val::Px(8.0),
+                    row_gap: Val::Px(8.0),
+                    flex_wrap: FlexWrap::Wrap,
+                    ..default()
+                },
+                background_color: Color::NONE.into(),
+                ..default()
+            })
+            .with_children(|row| {
+                let team = state.team(side);
+                let mut chimeras = team.chimeras.iter().enumerate().collect::<Vec<_>>();
+                chimeras.sort_by_key(|(_, chimera)| chimera.slot);
+                for (index, chimera) in chimeras {
+                    let is_front = front.is_some_and(|id| id.index == index);
+                    let color = if !chimera.is_alive() {
+                        CARD_DISABLED
+                    } else if is_front {
+                        CARD_SELECTED
+                    } else {
+                        CARD
+                    };
+                    spawn_progress_card(
+                        row,
+                        &chimera.name,
+                        &format_battle_combat_subtitle(chimera, &state.ability_database),
+                        progress_fraction(chimera.stats.hp, chimera.stats.max_hp),
+                        !chimera.is_alive(),
+                        color,
+                        Val::Px(172.0),
+                    );
+                }
+            });
+    });
+}
+
+fn format_work_chimera_card(run: &WorkRunState, chimera: &Chimera) -> String {
+    let mut lines = vec![
+        chimera.name.clone(),
+        format!(
+            "STA {}/{}  EFF {}",
+            chimera.stats.stamina, chimera.stats.max_stamina, chimera.stats.efficiency
+        ),
+    ];
+
+    let mut trait_lines = chimera
+        .traits
+        .iter()
+        .filter_map(|trait_id| run.assignment.trait_database.traits.get(trait_id))
+        .map(format_work_trait_summary)
+        .collect::<Vec<_>>();
+
+    trait_lines.extend(
+        chimera
+            .active_effects
+            .temporary_traits
+            .iter()
+            .filter_map(|timed_trait| {
+                run.assignment
+                    .trait_database
+                    .traits
+                    .get(&timed_trait.trait_id)
+                    .map(|trait_def| {
+                        format!(
+                            "{} ({}r)",
+                            format_work_trait_summary(trait_def),
+                            timed_trait.remaining_rounds
+                        )
+                    })
+            }),
+    );
+
+    if trait_lines.is_empty() {
+        lines.push("Trait: none".to_string());
+    } else {
+        lines.extend(trait_lines.into_iter().take(1));
+    }
+
+    lines.join("\n")
+}
+
+fn format_work_trait_summary(trait_def: &TraitDef) -> String {
+    format!(
+        "{} [{}]\n{}",
+        trait_def.name,
+        work_trigger_label(trait_def.trigger),
+        format_work_effects(&trait_def.effects)
+    )
+}
+
+fn format_work_effects(effects: &[Effect]) -> String {
+    effects
+        .iter()
+        .map(|effect| match effect {
+            Effect::AdvanceTask { amount } => format!("task +{amount}"),
+            Effect::AdvanceTaskByEfficiency { bonus } => format!("eff +{bonus}"),
+            Effect::GainCookie { amount } => format!("cookie +{amount}"),
+            Effect::AddEfficiency { amount, duration } => format!("EFF {amount:+}/{duration}r"),
+            Effect::AddStamina { amount } => format!("STA +{amount}"),
+            Effect::ConsumeStamina { amount } => format!("STA -{amount}"),
+            Effect::RestoreStamina { amount } => format!("STA +{amount}"),
+            Effect::AddTemporaryTrait { duration, .. } => format!("trait {duration}r"),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn work_trigger_label(trigger: Trigger) -> &'static str {
+    match trigger {
+        Trigger::WorkStart => "work start",
+        Trigger::RoundStart => "round",
+        Trigger::OnWork => "on work",
+        Trigger::AfterWork => "after",
+        Trigger::RoundEnd => "round end",
+        Trigger::TaskCompleted => "done",
+    }
+}
+
+fn format_battle_chimera_card(
+    chimera: &BattleChimera,
+    abilities: &BattleAbilityDatabase,
+    note: Option<&str>,
+) -> String {
+    let mut lines = vec![
+        format!("{}  #{}", chimera.name, chimera.slot + 1),
+        format!(
+            "HP {}/{}  ATK {}  Lv{}",
+            chimera.stats.hp, chimera.stats.max_hp, chimera.stats.attack, chimera.level
+        ),
+    ];
+
+    if let Some(note) = note {
+        lines.push(note.to_string());
+    }
+
+    let ability_lines = format_battle_ability_lines(&chimera.abilities, abilities);
+    if ability_lines.is_empty() {
+        lines.push("Ability: none".to_string());
+    } else {
+        lines.extend(ability_lines.into_iter().take(2));
+    }
+
+    lines.join("\n")
+}
+
+fn format_battle_combat_subtitle(
+    chimera: &BattleChimera,
+    abilities: &BattleAbilityDatabase,
+) -> String {
+    let ability_lines = format_battle_ability_lines(&chimera.abilities, abilities);
+    let ability_text = if ability_lines.is_empty() {
+        "Ability: none".to_string()
+    } else {
+        ability_lines
+            .into_iter()
+            .take(2)
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    format!(
+        "HP {}/{}  ATK {}  Lv{}\n{}",
+        chimera.stats.hp, chimera.stats.max_hp, chimera.stats.attack, chimera.level, ability_text
+    )
+}
+
+fn format_battle_ability_lines(
+    ability_ids: &[crate::core::battle::BattleAbilityId],
+    abilities: &BattleAbilityDatabase,
+) -> Vec<String> {
+    ability_ids
+        .iter()
+        .filter_map(|ability_id| abilities.abilities.get(ability_id))
+        .map(|ability| {
+            format!(
+                "{} [{}] {}",
+                ability.name,
+                battle_trigger_label(ability.trigger),
+                format_battle_effects(&ability.effects)
+            )
+        })
+        .collect()
+}
+
+fn format_battle_effects(effects: &[BattleEffect]) -> String {
+    effects
+        .iter()
+        .map(|effect| match effect {
+            BattleEffect::Chance { percent, effects } => {
+                format!("{percent}% {}", format_battle_effects(effects))
+            }
+            BattleEffect::DealDamage { amount } => format!("dmg {amount}"),
+            BattleEffect::DealAttackDamagePercent { percent, minimum } => {
+                format!("{percent}% ATK dmg min {minimum}")
+            }
+            BattleEffect::Heal { amount } => format!("heal {amount}"),
+            BattleEffect::AddAttack { amount } => format!("ATK +{amount}"),
+            BattleEffect::ReduceIncomingDamage { amount, minimum } => {
+                format!("dmg -{amount} min {minimum}")
+            }
+            BattleEffect::SwapWithTarget => "swap".to_string(),
+            BattleEffect::QueueSummon { name, .. } => format!("summon {name}"),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn battle_trigger_label(trigger: BattleTrigger) -> &'static str {
+    match trigger {
+        BattleTrigger::BattleStart => "battle start",
+        BattleTrigger::TurnStart => "turn start",
+        BattleTrigger::BeforeDamageTaken => "before hit",
+        BattleTrigger::AfterDamageTaken => "after hit",
+        BattleTrigger::OnAllyAttack => "ally attack",
+        BattleTrigger::AfterAttack => "after attack",
+        BattleTrigger::OnAllyAheadDamaged => "ally ahead hit",
+        BattleTrigger::OnSummon => "on summon",
+        BattleTrigger::OnKnockdown => "knockdown",
+    }
+}
+
+fn spawn_board_section(
+    parent: &mut ChildBuilder,
+    title: &str,
+    children: impl FnOnce(&mut ChildBuilder),
+) {
+    parent
+        .spawn(NodeBundle {
+            style: Style {
+                width: Val::Percent(100.0),
+                flex_direction: FlexDirection::Column,
+                padding: UiRect::all(Val::Px(11.0)),
+                row_gap: Val::Px(9.0),
+                ..default()
+            },
+            background_color: SURFACE_RAISED.into(),
+            ..default()
+        })
+        .with_children(|section| {
+            section.spawn(TextBundle::from_section(
+                title,
+                TextStyle {
+                    font_size: 18.0,
+                    color: ACCENT,
+                    ..default()
+                },
+            ));
+            children(section);
+        });
+}
+
+fn spawn_card(parent: &mut ChildBuilder, label: &str, color: Color, width: Val, height: Val) {
+    parent
+        .spawn(NodeBundle {
+            style: Style {
+                width,
+                height,
+                align_items: AlignItems::FlexStart,
+                justify_content: JustifyContent::Center,
+                padding: UiRect::all(Val::Px(10.0)),
+                ..default()
+            },
+            background_color: color.into(),
+            ..default()
+        })
+        .with_children(|card| {
+            card.spawn(TextBundle::from_section(
+                label,
+                TextStyle {
+                    font_size: 13.5,
+                    color: TEXT,
+                    ..default()
+                },
+            ));
+        });
+}
+
+fn spawn_metric_card(
+    parent: &mut ChildBuilder,
+    label: &str,
+    value: &str,
+    color: Color,
+    width: Val,
+) {
+    parent
+        .spawn(NodeBundle {
+            style: Style {
+                width,
+                min_height: Val::Px(58.0),
+                flex_direction: FlexDirection::Column,
+                justify_content: JustifyContent::Center,
+                padding: UiRect::horizontal(Val::Px(10.0)),
+                row_gap: Val::Px(3.0),
+                ..default()
+            },
+            background_color: color.into(),
+            ..default()
+        })
+        .with_children(|card| {
+            card.spawn(TextBundle::from_section(
+                label,
+                TextStyle {
+                    font_size: 12.0,
+                    color: MUTED,
+                    ..default()
+                },
+            ));
+            card.spawn(TextBundle::from_section(
+                value,
+                TextStyle {
+                    font_size: 16.0,
+                    color: TEXT,
+                    ..default()
+                },
+            ));
+        });
+}
+
+fn spawn_inventory_summary(parent: &mut ChildBuilder, run: &BattleRunState) {
+    parent
+        .spawn(NodeBundle {
+            style: Style {
+                width: Val::Percent(100.0),
+                column_gap: Val::Px(8.0),
+                row_gap: Val::Px(8.0),
+                flex_wrap: FlexWrap::Wrap,
+                ..default()
+            },
+            background_color: Color::NONE.into(),
+            ..default()
+        })
+        .with_children(|row| {
+            for chimera in &run.draft.bench {
+                spawn_card(
+                    row,
+                    &format_battle_chimera_card(chimera, &run.ability_database, Some("Bench")),
+                    CARD,
+                    Val::Px(190.0),
+                    Val::Px(142.0),
+                );
+            }
+            for equipment in &run.draft.equipment_inventory {
+                spawn_card(
+                    row,
+                    &format!(
+                        "{}\nEquipment\nATK +{}  HP +{}",
+                        equipment.name, equipment.attack, equipment.hp
+                    ),
+                    CARD_SELECTED,
+                    Val::Px(145.0),
+                    Val::Px(82.0),
+                );
+            }
+            if run.draft.bench.is_empty() && run.draft.equipment_inventory.is_empty() {
+                spawn_card(row, "Empty", CARD_DISABLED, Val::Px(120.0), Val::Px(60.0));
+            }
+        });
+}
+
+fn spawn_card_button(
+    parent: &mut ChildBuilder,
+    label: &str,
+    action: UiAction,
+    color: Color,
+    hovered: Color,
+    width: Val,
+    height: Val,
+) {
+    parent
+        .spawn((
+            ButtonBundle {
+                style: Style {
+                    width,
+                    height,
+                    align_items: AlignItems::FlexStart,
+                    justify_content: JustifyContent::Center,
+                    padding: UiRect::all(Val::Px(10.0)),
+                    ..default()
+                },
+                background_color: color.into(),
+                ..default()
+            },
+            action,
+            ButtonColors {
+                normal: color,
+                hovered,
+            },
+        ))
+        .with_children(|card| {
+            card.spawn(TextBundle::from_section(
+                label,
+                TextStyle {
+                    font_size: 13.5,
+                    color: TEXT,
+                    ..default()
+                },
+            ));
+        });
+}
+
+fn spawn_progress_card(
+    parent: &mut ChildBuilder,
+    title: &str,
+    subtitle: &str,
+    progress: f32,
+    completed: bool,
+    color: Color,
+    width: Val,
+) {
+    parent
+        .spawn(NodeBundle {
+            style: Style {
+                width,
+                height: Val::Px(118.0),
+                flex_direction: FlexDirection::Column,
+                padding: UiRect::all(Val::Px(8.0)),
+                row_gap: Val::Px(6.0),
+                ..default()
+            },
+            background_color: color.into(),
+            ..default()
+        })
+        .with_children(|card| {
+            card.spawn(TextBundle::from_section(
+                title,
+                TextStyle {
+                    font_size: 15.0,
+                    color: TEXT,
+                    ..default()
+                },
+            ));
+            card.spawn(TextBundle::from_section(
+                subtitle,
+                TextStyle {
+                    font_size: 12.0,
+                    color: MUTED,
+                    ..default()
+                },
+            ));
+            card.spawn(NodeBundle {
+                style: Style {
+                    width: Val::Percent(100.0),
+                    height: Val::Px(8.0),
+                    ..default()
+                },
+                background_color: PANEL.into(),
+                ..default()
+            })
+            .with_children(|bar| {
+                bar.spawn(NodeBundle {
+                    style: Style {
+                        width: Val::Percent((progress * 100.0).clamp(0.0, 100.0)),
+                        height: Val::Percent(100.0),
+                        ..default()
+                    },
+                    background_color: if completed { GOOD } else { ACCENT }.into(),
+                    ..default()
+                });
+            });
+        });
+}
+
+fn progress_fraction(current: i32, required: i32) -> f32 {
+    if required <= 0 {
+        1.0
+    } else {
+        current.max(0) as f32 / required as f32
+    }
+}
+
+fn hovered_card_color(color: Color) -> Color {
+    if color == CARD_ACTIVE {
+        CARD_ACTIVE_HOVERED
+    } else if color == CARD_SELECTED {
+        CARD_SELECTED_HOVERED
+    } else {
+        CARD_HOVERED
+    }
+}
+
+fn health_status_color(current: i32, max: i32) -> Color {
+    if max <= 0 {
+        return CARD;
+    }
+
+    let fraction = current as f32 / max as f32;
+    if fraction <= 0.34 {
+        DANGER
+    } else if fraction <= 0.67 {
+        CARD_SELECTED
+    } else {
+        CARD_ACTIVE
     }
 }
 
@@ -542,6 +1744,54 @@ fn format_battle_run_step(step: BattleRunStep) -> Vec<String> {
             vec![format!("Battle run: resolved battle, {result}.")]
         }
     }
+}
+
+fn format_battle_trigger_events(
+    outcome: &BattleOutcome,
+    previous_state: Option<&BattleState>,
+    current_state: Option<&BattleState>,
+    abilities: &BattleAbilityDatabase,
+) -> Vec<String> {
+    outcome
+        .events
+        .iter()
+        .filter_map(|event| match event {
+            BattleEvent::AbilityTriggered { source, ability } => {
+                let source_name = previous_state
+                    .and_then(|state| state.chimera(*source))
+                    .or_else(|| current_state.and_then(|state| state.chimera(*source)))
+                    .map(|chimera| chimera.name.as_str())
+                    .unwrap_or("Unknown");
+                let ability_text = abilities
+                    .abilities
+                    .get(ability)
+                    .map(|ability| {
+                        format!(
+                            "{} [{}]",
+                            ability.name,
+                            battle_trigger_label(ability.trigger)
+                        )
+                    })
+                    .unwrap_or_else(|| ability.0.to_string());
+
+                Some(format!(
+                    "Trigger: {} {} -> {}",
+                    side_label(source.side),
+                    source_name,
+                    ability_text
+                ))
+            }
+            BattleEvent::ChanceRolled {
+                percent,
+                roll,
+                success,
+            } => Some(format!(
+                "Trigger roll: {percent}% rolled {roll} => {}",
+                if *success { "success" } else { "miss" }
+            )),
+            _ => None,
+        })
+        .collect()
 }
 
 fn format_purchase_outcome(outcome: PurchaseOutcome) -> String {
@@ -682,254 +1932,10 @@ fn format_battle_score(state: &BattleState, run: &BattleRunState) -> String {
     )
 }
 
-fn format_chimeras(gameplay: &GameplayResource) -> String {
-    match gameplay.mode {
-        AppMode::WorkAssignment => format_work_chimeras(&gameplay.work.assignment),
-        AppMode::ChimeraBattle => format_run_chimeras(&gameplay.battle),
-    }
-}
-
-fn format_details(gameplay: &GameplayResource) -> String {
-    match gameplay.mode {
-        AppMode::WorkAssignment => format_work_run_details(&gameplay.work),
-        AppMode::ChimeraBattle => format_run_details(&gameplay.battle),
-    }
-}
-
-fn format_work_chimeras(state: &CombatState) -> String {
-    let mut chimeras = state.chimeras.iter().collect::<Vec<_>>();
-    chimeras.sort_by_key(|chimera| chimera.slot);
-
-    chimeras
-        .into_iter()
-        .map(|chimera| {
-            let status = if chimera.is_active { "active" } else { "out" };
-            format!(
-                "{}  slot {} ({status})\n  stamina {}/{}  efficiency {}\n",
-                chimera.name,
-                chimera.slot,
-                chimera.stats.stamina,
-                chimera.stats.max_stamina,
-                chimera.stats.efficiency
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn format_run_chimeras(run: &BattleRunState) -> String {
-    match &run.battle {
-        Some(state) => format_battle_chimeras(state),
-        None => format_draft_chimeras(run),
-    }
-}
-
-fn format_draft_chimeras(run: &BattleRunState) -> String {
-    let team = &run.draft.team;
-    let mut chimeras = team.chimeras.iter().collect::<Vec<_>>();
-    chimeras.sort_by_key(|chimera| chimera.slot);
-    let active_entries = chimeras
-        .into_iter()
-        .map(|chimera| {
-            let equipment = if chimera.equipment.is_empty() {
-                "none".to_string()
-            } else {
-                chimera
-                    .equipment
-                    .iter()
-                    .map(|equipment| equipment.name.clone())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            };
-            format!(
-                "  {}  slot {}\n    HP {}/{}  ATK {}  Lv{}  XP {}  Eq: {}",
-                chimera.name,
-                chimera.slot,
-                chimera.stats.hp,
-                chimera.stats.max_hp,
-                chimera.stats.attack,
-                chimera.level,
-                chimera.experience,
-                equipment
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    let bench_entries = if run.draft.bench.is_empty() {
-        "  empty".to_string()
-    } else {
-        run.draft
-            .bench
-            .iter()
-            .enumerate()
-            .map(|(index, chimera)| {
-                format!(
-                    "  {}. {}\n    HP {}/{}  ATK {}  Lv{}  XP {}",
-                    index + 1,
-                    chimera.name,
-                    chimera.stats.hp,
-                    chimera.stats.max_hp,
-                    chimera.stats.attack,
-                    chimera.level,
-                    chimera.experience
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-
-    let equipment_entries = if run.draft.equipment_inventory.is_empty() {
-        "  empty".to_string()
-    } else {
-        run.draft
-            .equipment_inventory
-            .iter()
-            .enumerate()
-            .map(|(index, equipment)| {
-                format!(
-                    "  {}. {}  ATK +{}  HP +{}  {:?}",
-                    index + 1,
-                    equipment.name,
-                    equipment.attack,
-                    equipment.hp,
-                    equipment.rarity
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-
-    format!(
-        "Draft Team - {} ({}/{})\n{active_entries}\n\nBench\n{bench_entries}\n\nEquipment Inventory\n{equipment_entries}",
-        team.name,
-        team.chimeras.len(),
-        run.draft.active_team_limit
-    )
-}
-
-fn format_battle_chimeras(state: &BattleState) -> String {
-    [TeamSide::Challenger, TeamSide::Defender]
-        .into_iter()
-        .map(|side| {
-            let team = state.team(side);
-            let mut chimeras = team.chimeras.iter().collect::<Vec<_>>();
-            chimeras.sort_by_key(|chimera| chimera.slot);
-            let entries = chimeras
-                .into_iter()
-                .map(|chimera| {
-                    let status = if chimera.is_alive() { "alive" } else { "down" };
-                    format!(
-                        "  {}  slot {} ({status})\n    HP {}/{}  ATK {}  Lv{}",
-                        chimera.name,
-                        chimera.slot,
-                        chimera.stats.hp,
-                        chimera.stats.max_hp,
-                        chimera.stats.attack,
-                        chimera.level
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            format!("{} - {}\n{entries}", side_label(side), team.name)
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n")
-}
-
-fn format_work_run_details(run: &WorkRunState) -> String {
-    let assignment = &run.assignment;
-    let period = run
-        .current_review_period()
-        .map(|period| {
-            format!(
-                "{} -> rank {} at {} cookies",
-                period.name, period.target_rank, period.required_cookie_score
-            )
-        })
-        .unwrap_or_else(|| "none".to_string());
-    let mode_detail = match run.phase {
-        WorkRunPhase::Review => format!(
-            "Review\n  Current target: {period}\n  Weeks elapsed: {}\n  Total cookies: {}\n\nAlpha Chimera\n{}",
-            run.weeks_elapsed,
-            run.total_cookies,
-            format_work_alpha_options(run)
-        ),
-        WorkRunPhase::Overtime => format!(
-            "Overtime\n  Cycle: {}\n  Overtime cookies: {}\n  Alpha: {}\n  Task growth is active after every clear.",
-            run.overtime_cycle,
-            run.overtime_cookies,
-            selected_work_alpha_name(run)
-        ),
-        WorkRunPhase::OvertimePrep => format!(
-            "Overtime Prep\n  Completed cycle: {}\n  Overtime cookies: {}\n  Alpha: {}\n  Q/W/E: swap adjacent chimeras\n  1-5: toggle active workers\n  Space: start next cycle",
-            run.overtime_cycle,
-            run.overtime_cookies,
-            selected_work_alpha_name(run)
-        ),
-        WorkRunPhase::Complete => format!(
-            "Complete\n  Final rank: {}\n  Total cookies: {}\n  Overtime cookies: {}",
-            run.current_rank, run.total_cookies, run.overtime_cookies
-        ),
-    };
-
-    format!("{mode_detail}\n\nTasks\n{}", format_tasks(assignment))
-}
-
-fn format_work_alpha_options(run: &WorkRunState) -> String {
-    if run.alpha_options.is_empty() {
-        return "  none".to_string();
-    }
-
-    run.alpha_options
-        .iter()
-        .enumerate()
-        .map(|(index, alpha)| {
-            let marker = if run.selected_alpha == Some(index) {
-                "*"
-            } else {
-                " "
-            };
-            format!(
-                "{marker} {}. {} -> {}",
-                index + 1,
-                alpha.name,
-                alpha.chimera_name
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 fn selected_work_alpha_name(run: &WorkRunState) -> &str {
     run.selected_alpha()
         .map(|alpha| alpha.name.as_str())
         .unwrap_or("None")
-}
-
-fn format_tasks(state: &CombatState) -> String {
-    let mut tasks = state.tasks.iter().collect::<Vec<_>>();
-    tasks.sort_by_key(|task| task.order);
-
-    tasks
-        .into_iter()
-        .map(|task| {
-            let status = if task.progress.completed {
-                "done"
-            } else {
-                "open"
-            };
-            format!(
-                "{}  ({status})\n  progress {}/{}  cost {}  reward {}\n",
-                task.name,
-                task.progress.current,
-                task.progress.required,
-                task.progress.stamina_cost,
-                task.progress.cookie_reward
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 fn format_battle_details(state: &BattleState) -> String {
@@ -1019,6 +2025,37 @@ fn format_shop_item(item: &BattleShopItem) -> String {
             "{}  Equipment  ATK +{}  HP +{}  {:?}  Tags: {}",
             offer.name, offer.attack, offer.hp, offer.rarity, tags
         ),
+    }
+}
+
+fn format_shop_card_item(item: &BattleShopItem, abilities: &BattleAbilityDatabase) -> String {
+    match item {
+        BattleShopItem::Chimera(offer) => {
+            let ability_text = format_battle_ability_lines(&offer.abilities, abilities)
+                .into_iter()
+                .take(1)
+                .next()
+                .unwrap_or_else(|| "Ability: none".to_string());
+            format!(
+                "{}\nChimera  Cost {}\nATK {}  HP {}\n{:?}\n{}",
+                offer.name,
+                item.cost(),
+                offer.attack,
+                offer.hp,
+                offer.rarity,
+                ability_text
+            )
+        }
+        BattleShopItem::Equipment(offer) => {
+            format!(
+                "{}\nEquipment  Cost {}\nATK +{}  HP +{}\n{:?}",
+                offer.name,
+                item.cost(),
+                offer.attack,
+                offer.hp,
+                offer.rarity
+            )
+        }
     }
 }
 
@@ -1118,21 +2155,39 @@ fn side_label(side: TeamSide) -> &'static str {
 
 fn format_logs(logs: &[String], offset_from_latest: usize) -> String {
     if logs.is_empty() {
-        return String::new();
+        return "No events yet.".to_string();
     }
 
     let max_offset = logs.len().saturating_sub(LOG_WINDOW_LINES);
     let offset = offset_from_latest.min(max_offset);
     let end = logs.len() - offset;
     let start = end.saturating_sub(LOG_WINDOW_LINES);
-    let mut lines = logs[start..end].to_vec();
+    let mut lines = logs[start..end]
+        .iter()
+        .enumerate()
+        .map(|(index, line)| format_log_line(start + index + 1, line))
+        .collect::<Vec<_>>();
 
     if offset > 0 {
         lines.push(format!(
-            "[{} newer log line(s) below - End jumps to latest]",
+            "[{} newer line(s) below - End jumps to latest]",
             offset
         ));
     }
 
     lines.join("\n")
+}
+
+fn format_log_line(index: usize, line: &str) -> String {
+    let marker = if line.starts_with("Trigger:") {
+        ">>"
+    } else if line.starts_with("Trigger roll:") {
+        "??"
+    } else if line.contains(" used ") {
+        "**"
+    } else {
+        "  "
+    };
+
+    format!("{index:>3} {marker} {line}")
 }
