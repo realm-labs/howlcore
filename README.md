@@ -81,10 +81,11 @@ The loader keeps config DTOs in `content::battle_config` and converts them into 
 
 Battle mode supports one optional run leader loaded from battle RON content:
 
-1. A `BattleLeader` owns a name and a list of `BattleLeaderEffect` values.
+1. A `BattleLeader` owns a name, optional preferred shop tags, a shop-bias cadence, and a list of `BattleLeaderEffect` values.
 2. Leader effects are applied when `BattleRunState` is created, before the first draft shop refresh.
 3. The current supported leader effects can add starting gold, run health, gold inside win rewards, challenger team stats, and shop offer stats.
-4. Leader effects are deterministic run-level modifiers, so they can later cover richer trainer, equipment, shop, or tag-specific rules without coupling them to the turn resolver.
+4. During shop refresh, every configured bias slot prefers an item whose tags match the leader's preferred shop tags.
+5. Leader effects and shop bias are deterministic run-level modifiers, so they can later cover richer trainer, equipment, shop, or tag-specific rules without coupling them to the turn resolver.
 
 ## Chimera Draft Flow
 

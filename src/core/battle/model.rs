@@ -88,6 +88,8 @@ pub struct BattleDefinition {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BattleLeader {
     pub name: String,
+    pub preferred_shop_tags: Vec<String>,
+    pub shop_bias_every: usize,
     pub effects: Vec<BattleLeaderEffect>,
 }
 

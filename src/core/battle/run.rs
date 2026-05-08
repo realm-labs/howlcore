@@ -58,6 +58,7 @@ pub struct BattleRunState {
     pub shop_size: usize,
     pub shop_pool: Vec<BattleShopItem>,
     pub next_offer_index: usize,
+    pub next_biased_offer_index: usize,
     pub wins: u32,
     pub losses: u32,
     pub result: Option<BattleRunResult>,
@@ -91,6 +92,7 @@ impl BattleRunState {
             shop_size: run_config.shop_size,
             shop_pool: run_config.shop_pool,
             next_offer_index: 0,
+            next_biased_offer_index: 0,
             wins: 0,
             losses: 0,
             result: None,
@@ -105,8 +107,8 @@ impl BattleRunState {
         }
 
         self.draft.shop.clear();
-        for _ in 0..self.shop_size {
-            let Some(offer) = self.next_shop_offer() else {
+        for slot in 0..self.shop_size {
+            let Some(offer) = self.next_shop_offer(slot) else {
                 break;
             };
             self.draft.shop.push(offer);
@@ -217,14 +219,53 @@ impl BattleRunState {
         }
     }
 
-    fn next_shop_offer(&mut self) -> Option<BattleShopItem> {
+    fn next_shop_offer(&mut self, slot: usize) -> Option<BattleShopItem> {
         if self.shop_pool.is_empty() {
             return None;
+        }
+
+        if self.should_bias_shop_slot(slot)
+            && let Some(offer) = self.next_biased_shop_offer()
+        {
+            return Some(offer);
         }
 
         let offer = self.shop_pool[self.next_offer_index % self.shop_pool.len()].clone();
         self.next_offer_index += 1;
         Some(offer)
+    }
+
+    fn should_bias_shop_slot(&self, slot: usize) -> bool {
+        let Some(leader) = &self.leader else {
+            return false;
+        };
+
+        leader.shop_bias_every > 0
+            && !leader.preferred_shop_tags.is_empty()
+            && (slot + 1).is_multiple_of(leader.shop_bias_every)
+    }
+
+    fn next_biased_shop_offer(&mut self) -> Option<BattleShopItem> {
+        let preferred_tags = &self.leader.as_ref()?.preferred_shop_tags;
+        let matching_indices = self
+            .shop_pool
+            .iter()
+            .enumerate()
+            .filter_map(|(index, item)| {
+                item.tags()
+                    .iter()
+                    .any(|tag| preferred_tags.contains(tag))
+                    .then_some(index)
+            })
+            .collect::<Vec<_>>();
+
+        if matching_indices.is_empty() {
+            return None;
+        }
+
+        let index = matching_indices[self.next_biased_offer_index % matching_indices.len()];
+        self.next_biased_offer_index += 1;
+        Some(self.shop_pool[index].clone())
     }
 
     pub fn current_opponent(&self) -> Option<&BattleOpponentRound> {

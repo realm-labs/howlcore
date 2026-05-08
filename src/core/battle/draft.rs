@@ -132,6 +132,13 @@ impl BattleShopItem {
             Self::Equipment(offer) => &offer.name,
         }
     }
+
+    pub fn tags(&self) -> &[String] {
+        match self {
+            Self::Chimera(offer) => &offer.tags,
+            Self::Equipment(offer) => &offer.tags,
+        }
+    }
 }
 
 impl DraftState {

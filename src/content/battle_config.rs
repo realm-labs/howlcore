@@ -54,6 +54,10 @@ pub struct BattleConfig {
 pub struct LeaderConfig {
     pub name: String,
     #[serde(default)]
+    pub preferred_shop_tags: Vec<String>,
+    #[serde(default)]
+    pub shop_bias_every: usize,
+    #[serde(default)]
     pub effects: Vec<LeaderEffectConfig>,
 }
 
@@ -339,6 +343,8 @@ fn build_battle_definition(abilities: AbilityFile, battle: BattleConfig) -> Batt
 fn build_leader(leader: LeaderConfig) -> BattleLeader {
     BattleLeader {
         name: leader.name,
+        preferred_shop_tags: leader.preferred_shop_tags,
+        shop_bias_every: leader.shop_bias_every,
         effects: leader.effects.into_iter().map(Into::into).collect(),
     }
 }

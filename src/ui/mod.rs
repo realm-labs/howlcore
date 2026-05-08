@@ -842,14 +842,19 @@ fn format_run_details(run: &BattleRunState) -> String {
 }
 
 fn format_shop_item(item: &BattleShopItem) -> String {
+    let tags = if item.tags().is_empty() {
+        "none".to_string()
+    } else {
+        item.tags().join(", ")
+    };
     match item {
         BattleShopItem::Chimera(offer) => format!(
-            "{}  Chimera  ATK {}  HP {}  {:?}",
-            offer.name, offer.attack, offer.hp, offer.rarity
+            "{}  Chimera  ATK {}  HP {}  {:?}  Tags: {}",
+            offer.name, offer.attack, offer.hp, offer.rarity, tags
         ),
         BattleShopItem::Equipment(offer) => format!(
-            "{}  Equipment  ATK +{}  HP +{}  {:?}",
-            offer.name, offer.attack, offer.hp, offer.rarity
+            "{}  Equipment  ATK +{}  HP +{}  {:?}  Tags: {}",
+            offer.name, offer.attack, offer.hp, offer.rarity, tags
         ),
     }
 }
@@ -883,31 +888,49 @@ fn format_leader_effects(run: &BattleRunState) -> String {
     };
 
     if leader.effects.is_empty() {
-        return "none".to_string();
+        let shop_bias = format_leader_shop_bias(leader);
+        return if shop_bias.is_empty() {
+            "none".to_string()
+        } else {
+            shop_bias
+        };
     }
 
-    leader
-        .effects
-        .iter()
-        .map(|effect| match effect {
-            BattleLeaderEffect::AddStartingGold { amount } => {
-                format!("  Starting gold {amount:+}")
-            }
-            BattleLeaderEffect::AddRunHealth { amount } => {
-                format!("  Run health {amount:+}")
-            }
-            BattleLeaderEffect::AddWinGoldReward { amount } => {
-                format!("  Win reward {amount:+} gold")
-            }
-            BattleLeaderEffect::AddTeamStats { attack, hp } => {
-                format!("  Team ATK {attack:+}, HP {hp:+}")
-            }
-            BattleLeaderEffect::AddShopOfferStats { attack, hp } => {
-                format!("  Shop offers ATK {attack:+}, HP {hp:+}")
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+    let mut lines = Vec::new();
+    let shop_bias = format_leader_shop_bias(leader);
+    if !shop_bias.is_empty() {
+        lines.push(shop_bias);
+    }
+    lines.extend(leader.effects.iter().map(|effect| match effect {
+        BattleLeaderEffect::AddStartingGold { amount } => {
+            format!("  Starting gold {amount:+}")
+        }
+        BattleLeaderEffect::AddRunHealth { amount } => {
+            format!("  Run health {amount:+}")
+        }
+        BattleLeaderEffect::AddWinGoldReward { amount } => {
+            format!("  Win reward {amount:+} gold")
+        }
+        BattleLeaderEffect::AddTeamStats { attack, hp } => {
+            format!("  Team ATK {attack:+}, HP {hp:+}")
+        }
+        BattleLeaderEffect::AddShopOfferStats { attack, hp } => {
+            format!("  Shop offers ATK {attack:+}, HP {hp:+}")
+        }
+    }));
+    lines.join("\n")
+}
+
+fn format_leader_shop_bias(leader: &crate::core::battle::BattleLeader) -> String {
+    if leader.preferred_shop_tags.is_empty() || leader.shop_bias_every == 0 {
+        return String::new();
+    }
+
+    format!(
+        "  Shop bias every {} item(s): {}",
+        leader.shop_bias_every,
+        leader.preferred_shop_tags.join(", ")
+    )
 }
 
 fn format_summon_queue(state: &BattleState, side: TeamSide) -> String {

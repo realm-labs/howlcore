@@ -1,9 +1,9 @@
 use crate::core::battle::{
     BATTLE_LOSS_HEALTH_DAMAGE, BATTLE_RUN_HEALTH, BATTLE_SHOP_SIZE, BATTLE_STARTING_GOLD,
-    BATTLE_WIN_GOLD_REWARD, BattleAbilityDatabase, BattleChimera, BattleDefinition, BattleLeader,
-    BattleLeaderEffect, BattleOpponentRound, BattleRarity, BattleRunConfig, BattleRunPhase,
-    BattleRunResult, BattleRunReward, BattleRunState, BattleRunStep, BattleShopItem, BattleStats,
-    BattleTeam, TeamSide,
+    BATTLE_WIN_GOLD_REWARD, BattleAbilityDatabase, BattleChimera, BattleChimeraOffer,
+    BattleDefinition, BattleLeader, BattleLeaderEffect, BattleOpponentRound, BattleRarity,
+    BattleRunConfig, BattleRunPhase, BattleRunResult, BattleRunReward, BattleRunState,
+    BattleRunStep, BattleShopItem, BattleStats, BattleTeam, TeamSide,
 };
 
 fn chimera(name: &str, slot: u32, attack: i32, hp: i32) -> BattleChimera {
@@ -141,6 +141,8 @@ fn run_should_apply_leader_effects() {
     let mut definition = battle_definition();
     definition.leader = Some(BattleLeader {
         name: "Leader".to_string(),
+        preferred_shop_tags: Vec::new(),
+        shop_bias_every: 0,
         effects: vec![
             BattleLeaderEffect::AddStartingGold { amount: 2 },
             BattleLeaderEffect::AddRunHealth { amount: 1 },
@@ -174,6 +176,47 @@ fn run_should_apply_leader_effects() {
     assert_eq!(first_chimera.stats.hp, 12);
     assert_eq!(first_offer.attack, 6);
     assert_eq!(first_offer.hp, 6);
+}
+
+#[test]
+fn run_should_bias_shop_toward_leader_preferred_tags() {
+    let mut definition = battle_definition();
+    definition.leader = Some(BattleLeader {
+        name: "Summon Leader".to_string(),
+        preferred_shop_tags: vec!["summon".to_string()],
+        shop_bias_every: 2,
+        effects: Vec::new(),
+    });
+    let mut biased =
+        BattleChimeraOffer::new("Summon Target", BattleRarity::White, 1, 3, Vec::new());
+    biased.tags.push("summon".to_string());
+    definition.run.shop_pool = vec![
+        BattleShopItem::Chimera(BattleChimeraOffer::new(
+            "Normal A",
+            BattleRarity::White,
+            1,
+            3,
+            Vec::new(),
+        )),
+        BattleShopItem::Chimera(BattleChimeraOffer::new(
+            "Normal B",
+            BattleRarity::White,
+            1,
+            3,
+            Vec::new(),
+        )),
+        BattleShopItem::Chimera(biased),
+    ];
+
+    let run = BattleRunState::from_definition(definition);
+    let names = run
+        .draft
+        .shop
+        .iter()
+        .map(|item| item.name().to_string())
+        .collect::<Vec<_>>();
+
+    assert_eq!(names, vec!["Normal A", "Summon Target", "Normal B"]);
 }
 
 #[test]
