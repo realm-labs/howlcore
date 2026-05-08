@@ -2,7 +2,8 @@ use crate::core::battle::{
     BATTLE_LOSS_HEALTH_DAMAGE, BATTLE_RUN_HEALTH, BATTLE_SHOP_SIZE, BATTLE_STARTING_GOLD,
     BATTLE_WIN_GOLD_REWARD, BattleAbilityDatabase, BattleChimera, BattleDefinition, BattleLeader,
     BattleLeaderEffect, BattleOpponentRound, BattleRarity, BattleRunConfig, BattleRunPhase,
-    BattleRunResult, BattleRunState, BattleRunStep, BattleStats, BattleTeam, TeamSide,
+    BattleRunResult, BattleRunReward, BattleRunState, BattleRunStep, BattleShopItem, BattleStats,
+    BattleTeam, TeamSide,
 };
 
 fn chimera(name: &str, slot: u32, attack: i32, hp: i32) -> BattleChimera {
@@ -19,6 +20,7 @@ fn chimera(name: &str, slot: u32, attack: i32, hp: i32) -> BattleChimera {
             hp,
         },
         abilities: Vec::new(),
+        equipment: Vec::new(),
     }
 }
 
@@ -83,21 +85,27 @@ fn run_config(defender: BattleTeam) -> BattleRunConfig {
             BattleOpponentRound {
                 name: "Round 1".to_string(),
                 defender: defender.clone(),
-                win_gold_reward: BATTLE_WIN_GOLD_REWARD,
+                win_rewards: vec![BattleRunReward::AddGold {
+                    amount: BATTLE_WIN_GOLD_REWARD,
+                }],
                 loss_health_damage: BATTLE_LOSS_HEALTH_DAMAGE,
                 is_boss: false,
             },
             BattleOpponentRound {
                 name: "Round 2".to_string(),
                 defender: defender.clone(),
-                win_gold_reward: BATTLE_WIN_GOLD_REWARD,
+                win_rewards: vec![BattleRunReward::AddGold {
+                    amount: BATTLE_WIN_GOLD_REWARD,
+                }],
                 loss_health_damage: BATTLE_LOSS_HEALTH_DAMAGE,
                 is_boss: false,
             },
             BattleOpponentRound {
                 name: "Final Round".to_string(),
                 defender,
-                win_gold_reward: BATTLE_WIN_GOLD_REWARD,
+                win_rewards: vec![BattleRunReward::AddGold {
+                    amount: BATTLE_WIN_GOLD_REWARD,
+                }],
                 loss_health_damage: BATTLE_LOSS_HEALTH_DAMAGE,
                 is_boss: true,
             },
@@ -144,7 +152,10 @@ fn run_should_apply_leader_effects() {
 
     let run = BattleRunState::from_definition(definition);
     let first_chimera = &run.draft.team.chimeras[0];
-    let first_offer = &run.draft.shop[0];
+    let first_offer = match &run.draft.shop[0] {
+        BattleShopItem::Chimera(offer) => offer,
+        BattleShopItem::Equipment(_) => panic!("expected first shop item to be a chimera"),
+    };
 
     assert_eq!(
         run.leader.as_ref().map(|leader| leader.name.as_str()),
@@ -152,7 +163,12 @@ fn run_should_apply_leader_effects() {
     );
     assert_eq!(run.draft.gold, BATTLE_STARTING_GOLD + 2);
     assert_eq!(run.health, BATTLE_RUN_HEALTH + 1);
-    assert_eq!(run.win_gold_reward, BATTLE_WIN_GOLD_REWARD + 2);
+    assert_eq!(
+        run.opponents[0].win_rewards[0],
+        BattleRunReward::AddGold {
+            amount: BATTLE_WIN_GOLD_REWARD + 2
+        }
+    );
     assert_eq!(first_chimera.stats.attack, 6);
     assert_eq!(first_chimera.stats.max_hp, 12);
     assert_eq!(first_chimera.stats.hp, 12);
@@ -169,19 +185,18 @@ fn run_should_use_definition_run_config() {
         active_team_limit: 3,
         health: 5,
         loss_health_damage: 2,
-        win_gold_reward: 4,
         opponent_rounds: vec![
             BattleOpponentRound {
                 name: "Round 1".to_string(),
                 defender: team(TeamSide::Defender, "One", vec![chimera("One", 0, 1, 2)]),
-                win_gold_reward: 4,
+                win_rewards: vec![BattleRunReward::AddGold { amount: 4 }],
                 loss_health_damage: 2,
                 is_boss: false,
             },
             BattleOpponentRound {
                 name: "Round 2".to_string(),
                 defender: team(TeamSide::Defender, "Two", vec![chimera("Two", 0, 1, 2)]),
-                win_gold_reward: 4,
+                win_rewards: vec![BattleRunReward::AddGold { amount: 4 }],
                 loss_health_damage: 2,
                 is_boss: true,
             },
@@ -196,7 +211,6 @@ fn run_should_use_definition_run_config() {
     assert_eq!(run.health, 5);
     assert_eq!(run.draft.active_team_limit, 3);
     assert_eq!(run.loss_health_damage, 2);
-    assert_eq!(run.win_gold_reward, 4);
     assert_eq!(run.opponents.len(), 2);
 }
 
@@ -211,7 +225,7 @@ fn run_should_use_configured_opponent_rounds() {
                 "Qualifier Defender",
                 vec![chimera("Weak", 0, 1, 2)],
             ),
-            win_gold_reward: 7,
+            win_rewards: vec![BattleRunReward::AddGold { amount: 7 }],
             loss_health_damage: 1,
             is_boss: false,
         },
@@ -222,7 +236,7 @@ fn run_should_use_configured_opponent_rounds() {
                 "Final Defender",
                 vec![chimera("Boss", 0, 2, 3)],
             ),
-            win_gold_reward: 9,
+            win_rewards: vec![BattleRunReward::AddGold { amount: 9 }],
             loss_health_damage: 2,
             is_boss: true,
         },
@@ -247,13 +261,56 @@ fn run_should_use_configured_opponent_rounds() {
 }
 
 #[test]
+fn run_should_apply_structured_win_rewards() {
+    let mut definition = battle_definition();
+    definition.run.opponent_rounds = vec![BattleOpponentRound {
+        name: "Reward Round".to_string(),
+        defender: team(
+            TeamSide::Defender,
+            "Reward Defender",
+            vec![chimera("Weak", 0, 1, 2)],
+        ),
+        win_rewards: vec![
+            BattleRunReward::AddGold { amount: 5 },
+            BattleRunReward::HealRun { amount: 1 },
+            BattleRunReward::AddShopItem {
+                item: BattleRunConfig::default().shop_pool[0].clone(),
+            },
+        ],
+        loss_health_damage: 1,
+        is_boss: false,
+    }];
+    let mut run = BattleRunState::from_definition(definition);
+    run.health = BATTLE_RUN_HEALTH - 1;
+    run.start_battle().unwrap();
+
+    let (_step, outcome) = run.step().unwrap();
+
+    assert_eq!(run.draft.gold, BATTLE_STARTING_GOLD + 5);
+    assert_eq!(run.health, BATTLE_RUN_HEALTH);
+    assert!(
+        run.draft
+            .shop
+            .iter()
+            .any(|item| item.name() == "Workaholic")
+    );
+    assert!(outcome.logs.iter().any(|line| line.contains("healed")));
+    assert!(
+        outcome
+            .logs
+            .iter()
+            .any(|line| line.contains("added Workaholic"))
+    );
+}
+
+#[test]
 fn run_should_refresh_shop_in_draft_phase() {
     let mut run = BattleRunState::from_definition(battle_definition());
     let first_names = run
         .draft
         .shop
         .iter()
-        .map(|offer| offer.name.clone())
+        .map(|item| item.name().to_string())
         .collect::<Vec<_>>();
 
     run.refresh_shop().unwrap();
@@ -261,7 +318,7 @@ fn run_should_refresh_shop_in_draft_phase() {
         .draft
         .shop
         .iter()
-        .map(|offer| offer.name.clone())
+        .map(|item| item.name().to_string())
         .collect::<Vec<_>>();
 
     assert_ne!(first_names, refreshed_names);

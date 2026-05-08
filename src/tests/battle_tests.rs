@@ -19,6 +19,7 @@ fn chimera(name: &str, slot: u32, attack: i32, hp: i32) -> BattleChimera {
             hp,
         },
         abilities: Vec::new(),
+        equipment: Vec::new(),
     }
 }
 

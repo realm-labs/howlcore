@@ -5,10 +5,11 @@ use std::collections::HashSet;
 
 use crate::core::battle::{
     BATTLE_LOSS_HEALTH_DAMAGE, BATTLE_RUN_HEALTH, BATTLE_SHOP_SIZE, BATTLE_STARTING_GOLD,
-    BATTLE_WIN_GOLD_REWARD, BattleAbilityDatabase, BattleAbilityDef, BattleAbilityId,
-    BattleChimera, BattleChimeraOffer, BattleDefinition, BattleEffect, BattleLeader,
-    BattleLeaderEffect, BattleOpponentRound, BattleRarity, BattleRunConfig, BattleStats,
-    BattleTargetSelector, BattleTeam, BattleTrigger, DEFAULT_ACTIVE_TEAM_LIMIT, TeamSide,
+    BattleAbilityDatabase, BattleAbilityDef, BattleAbilityId, BattleChimera, BattleChimeraOffer,
+    BattleDefinition, BattleEffect, BattleEquipmentOffer, BattleLeader, BattleLeaderEffect,
+    BattleOpponentRound, BattleRarity, BattleRunConfig, BattleRunReward, BattleShopItem,
+    BattleStats, BattleTargetSelector, BattleTeam, BattleTrigger, DEFAULT_ACTIVE_TEAM_LIMIT,
+    TeamSide,
 };
 
 const ABILITIES_RON: &str = include_str!("../../assets/battle/abilities.ron");
@@ -77,24 +78,45 @@ pub struct RunConfig {
     pub health: i32,
     #[serde(default = "default_loss_health_damage")]
     pub loss_health_damage: i32,
-    #[serde(default = "default_win_gold_reward")]
-    pub win_gold_reward: i32,
     #[serde(default)]
     pub opponent_rounds: Vec<OpponentRoundConfig>,
     #[serde(default)]
-    pub shop_pool: Vec<ChimeraConfig>,
+    pub shop_pool: Vec<ShopItemConfig>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct OpponentRoundConfig {
     pub name: String,
     pub defender: TeamConfig,
-    #[serde(default)]
-    pub win_gold_reward: Option<i32>,
+    pub win_rewards: Vec<RewardConfig>,
     #[serde(default)]
     pub loss_health_damage: Option<i32>,
     #[serde(default)]
     pub is_boss: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub enum RewardConfig {
+    AddGold { amount: i32 },
+    HealRun { amount: i32 },
+    AddShopItem { item: ShopItemConfig },
+}
+
+#[derive(Debug, Deserialize)]
+pub enum ShopItemConfig {
+    Chimera(ChimeraConfig),
+    Equipment(EquipmentConfig),
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EquipmentConfig {
+    pub name: String,
+    pub attack: i32,
+    pub hp: i32,
+    #[serde(default = "default_rarity")]
+    pub rarity: RarityConfig,
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -237,12 +259,32 @@ fn validate_config(
                 validate_ability_ref(ability, &ability_ids)?;
             }
         }
+
+        for reward in &round.win_rewards {
+            if let RewardConfig::AddShopItem { item } = reward {
+                validate_shop_item(item, &ability_ids)?;
+            }
+        }
     }
 
-    for offer in &battle.run.shop_pool {
-        for ability in &offer.abilities {
-            validate_ability_ref(ability, &ability_ids)?;
+    for item in &battle.run.shop_pool {
+        validate_shop_item(item, &ability_ids)?;
+    }
+
+    Ok(())
+}
+
+fn validate_shop_item(
+    item: &ShopItemConfig,
+    ability_ids: &HashSet<String>,
+) -> Result<(), BattleConfigError> {
+    match item {
+        ShopItemConfig::Chimera(chimera) => {
+            for ability in &chimera.abilities {
+                validate_ability_ref(ability, ability_ids)?;
+            }
         }
+        ShopItemConfig::Equipment(_) => {}
     }
 
     Ok(())
@@ -308,25 +350,23 @@ fn build_run_config(run: RunConfig) -> BattleRunConfig {
         active_team_limit: run.active_team_limit,
         health: run.health,
         loss_health_damage: run.loss_health_damage,
-        win_gold_reward: run.win_gold_reward,
         opponent_rounds: run
             .opponent_rounds
             .into_iter()
-            .map(|round| build_opponent_round(round, run.win_gold_reward, run.loss_health_damage))
+            .map(|round| build_opponent_round(round, run.loss_health_damage))
             .collect(),
-        shop_pool: run.shop_pool.into_iter().map(build_offer).collect(),
+        shop_pool: run.shop_pool.into_iter().map(build_shop_item).collect(),
     }
 }
 
 fn build_opponent_round(
     round: OpponentRoundConfig,
-    default_win_gold_reward: i32,
     default_loss_health_damage: i32,
 ) -> BattleOpponentRound {
     BattleOpponentRound {
         name: round.name,
         defender: build_team(TeamSide::Defender, round.defender),
-        win_gold_reward: round.win_gold_reward.unwrap_or(default_win_gold_reward),
+        win_rewards: round.win_rewards.into_iter().map(Into::into).collect(),
         loss_health_damage: round
             .loss_health_damage
             .unwrap_or(default_loss_health_damage),
@@ -379,6 +419,16 @@ fn build_chimera(slot: u32, chimera: ChimeraConfig) -> BattleChimera {
             hp: chimera.hp,
         },
         abilities: chimera.abilities.into_iter().map(ability_id).collect(),
+        equipment: Vec::new(),
+    }
+}
+
+fn build_shop_item(item: ShopItemConfig) -> BattleShopItem {
+    match item {
+        ShopItemConfig::Chimera(chimera) => BattleShopItem::Chimera(build_offer(chimera)),
+        ShopItemConfig::Equipment(equipment) => {
+            BattleShopItem::Equipment(build_equipment(equipment))
+        }
     }
 }
 
@@ -391,6 +441,17 @@ fn build_offer(chimera: ChimeraConfig) -> BattleChimeraOffer {
         chimera.abilities.into_iter().map(ability_id).collect(),
     );
     offer.tags = chimera.tags;
+    offer
+}
+
+fn build_equipment(equipment: EquipmentConfig) -> BattleEquipmentOffer {
+    let mut offer = BattleEquipmentOffer::new(
+        equipment.name,
+        equipment.rarity.into(),
+        equipment.attack,
+        equipment.hp,
+    );
+    offer.tags = equipment.tags;
     offer
 }
 
@@ -456,6 +517,18 @@ impl From<LeaderEffectConfig> for BattleLeaderEffect {
     }
 }
 
+impl From<RewardConfig> for BattleRunReward {
+    fn from(value: RewardConfig) -> Self {
+        match value {
+            RewardConfig::AddGold { amount } => Self::AddGold { amount },
+            RewardConfig::HealRun { amount } => Self::HealRun { amount },
+            RewardConfig::AddShopItem { item } => Self::AddShopItem {
+                item: build_shop_item(item),
+            },
+        }
+    }
+}
+
 impl From<EffectConfig> for BattleEffect {
     fn from(value: EffectConfig) -> Self {
         match value {
@@ -504,7 +577,6 @@ impl Default for RunConfig {
             active_team_limit: default_active_team_limit(),
             health: default_run_health(),
             loss_health_damage: default_loss_health_damage(),
-            win_gold_reward: default_win_gold_reward(),
             opponent_rounds: Vec::new(),
             shop_pool: Vec::new(),
         }
@@ -529,10 +601,6 @@ fn default_run_health() -> i32 {
 
 fn default_loss_health_damage() -> i32 {
     BATTLE_LOSS_HEALTH_DAMAGE
-}
-
-fn default_win_gold_reward() -> i32 {
-    BATTLE_WIN_GOLD_REWARD
 }
 
 fn ability_id(value: String) -> BattleAbilityId {

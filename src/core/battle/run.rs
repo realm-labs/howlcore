@@ -1,9 +1,10 @@
 //! Draft-to-battle run loop for Chimera Battle mode.
 
 use crate::core::battle::{
-    BattleAbilityDatabase, BattleAbilityId, BattleChimeraOffer, BattleDefinition, BattleLeader,
-    BattleLeaderEffect, BattleOpponentRound, BattleOutcome, BattleRarity, BattleRng,
-    BattleRunConfig, BattleState, BattleTeam, DEFAULT_ACTIVE_TEAM_LIMIT, DraftState, TeamSide,
+    BattleAbilityDatabase, BattleAbilityId, BattleChimeraOffer, BattleDefinition,
+    BattleEquipmentOffer, BattleLeader, BattleLeaderEffect, BattleOpponentRound, BattleOutcome,
+    BattleRarity, BattleRng, BattleRunConfig, BattleRunReward, BattleShopItem, BattleState,
+    BattleTeam, DEFAULT_ACTIVE_TEAM_LIMIT, DraftState, TeamSide,
 };
 
 pub const BATTLE_WIN_GOLD_REWARD: i32 = 3;
@@ -54,9 +55,8 @@ pub struct BattleRunState {
     pub health: i32,
     pub max_health: i32,
     pub loss_health_damage: i32,
-    pub win_gold_reward: i32,
     pub shop_size: usize,
-    pub shop_pool: Vec<BattleChimeraOffer>,
+    pub shop_pool: Vec<BattleShopItem>,
     pub next_offer_index: usize,
     pub wins: u32,
     pub losses: u32,
@@ -74,6 +74,7 @@ impl BattleRunState {
                 gold: run_config.starting_gold,
                 team: challenger,
                 bench: Vec::new(),
+                equipment_inventory: Vec::new(),
                 active_team_limit: run_config.active_team_limit,
                 shop: Vec::new(),
             },
@@ -87,7 +88,6 @@ impl BattleRunState {
             health: run_config.health,
             max_health: run_config.health,
             loss_health_damage: run_config.loss_health_damage,
-            win_gold_reward: run_config.win_gold_reward,
             shop_size: run_config.shop_size,
             shop_pool: run_config.shop_pool,
             next_offer_index: 0,
@@ -176,12 +176,13 @@ impl BattleRunState {
     }
 
     fn resolve_battle(&mut self, winner: Option<TeamSide>, outcome: &mut BattleOutcome) {
+        let rewards = self
+            .current_opponent()
+            .map(|opponent| opponent.win_rewards.clone())
+            .unwrap_or_default();
         match winner {
             Some(TeamSide::Challenger) => {
-                let reward = self.current_opponent_win_reward();
                 self.wins += 1;
-                self.draft.gold += reward;
-                outcome.push_log(format!("Run reward: gained {reward} gold."));
             }
             Some(TeamSide::Defender) | None => {
                 let damage = self.current_opponent_loss_damage();
@@ -210,9 +211,13 @@ impl BattleRunState {
         if self.phase == BattleRunPhase::Draft {
             let _ = self.refresh_shop();
         }
+
+        if winner == Some(TeamSide::Challenger) {
+            self.apply_win_rewards(&rewards, outcome);
+        }
     }
 
-    fn next_shop_offer(&mut self) -> Option<BattleChimeraOffer> {
+    fn next_shop_offer(&mut self) -> Option<BattleShopItem> {
         if self.shop_pool.is_empty() {
             return None;
         }
@@ -226,16 +231,35 @@ impl BattleRunState {
         self.opponents.get(self.battle_index)
     }
 
-    fn current_opponent_win_reward(&self) -> i32 {
-        self.current_opponent()
-            .map(|opponent| opponent.win_gold_reward)
-            .unwrap_or(self.win_gold_reward)
-    }
-
     fn current_opponent_loss_damage(&self) -> i32 {
         self.current_opponent()
             .map(|opponent| opponent.loss_health_damage)
             .unwrap_or(self.loss_health_damage)
+    }
+
+    fn apply_win_rewards(&mut self, rewards: &[BattleRunReward], outcome: &mut BattleOutcome) {
+        for reward in rewards {
+            match reward {
+                BattleRunReward::AddGold { amount } => {
+                    self.draft.gold += amount;
+                    outcome.push_log(format!("Run reward: gained {amount} gold."));
+                }
+                BattleRunReward::HealRun { amount } => {
+                    let before = self.health;
+                    self.health = (self.health + amount).clamp(0, self.max_health);
+                    outcome.push_log(format!(
+                        "Run reward: healed {} health. Health: {}/{}.",
+                        self.health - before,
+                        self.health,
+                        self.max_health
+                    ));
+                }
+                BattleRunReward::AddShopItem { item } => {
+                    self.draft.shop.push(item.clone());
+                    outcome.push_log(format!("Run reward: added {} to the shop.", item.name()));
+                }
+            }
+        }
     }
 }
 
@@ -257,9 +281,8 @@ fn apply_leader(
                 config.health += amount;
             }
             BattleLeaderEffect::AddWinGoldReward { amount } => {
-                config.win_gold_reward += amount;
                 for opponent in &mut config.opponent_rounds {
-                    opponent.win_gold_reward += amount;
+                    add_gold_to_rewards(&mut opponent.win_rewards, amount);
                 }
             }
             BattleLeaderEffect::AddTeamStats { attack, hp } => {
@@ -273,8 +296,20 @@ fn apply_leader(
 
     config.starting_gold = config.starting_gold.max(0);
     config.health = config.health.max(1);
-    config.win_gold_reward = config.win_gold_reward.max(0);
     config
+}
+
+fn add_gold_to_rewards(rewards: &mut Vec<BattleRunReward>, amount: i32) {
+    if let Some(BattleRunReward::AddGold {
+        amount: reward_amount,
+    }) = rewards
+        .iter_mut()
+        .find(|reward| matches!(reward, BattleRunReward::AddGold { .. }))
+    {
+        *reward_amount = (*reward_amount + amount).max(0);
+    } else if amount > 0 {
+        rewards.push(BattleRunReward::AddGold { amount });
+    }
 }
 
 fn effective_run_config(mut config: BattleRunConfig) -> BattleRunConfig {
@@ -304,10 +339,18 @@ fn add_team_stats(team: &mut BattleTeam, attack: i32, hp: i32) {
     }
 }
 
-fn add_shop_offer_stats(offers: &mut [BattleChimeraOffer], attack: i32, hp: i32) {
+fn add_shop_offer_stats(offers: &mut [BattleShopItem], attack: i32, hp: i32) {
     for offer in offers {
-        offer.attack = (offer.attack + attack).max(0);
-        offer.hp = (offer.hp + hp).max(1);
+        match offer {
+            BattleShopItem::Chimera(offer) => {
+                offer.attack = (offer.attack + attack).max(0);
+                offer.hp = (offer.hp + hp).max(1);
+            }
+            BattleShopItem::Equipment(offer) => {
+                offer.attack = (offer.attack + attack).max(0);
+                offer.hp = (offer.hp + hp).max(0);
+            }
+        }
     }
 }
 
@@ -319,43 +362,48 @@ impl Default for BattleRunConfig {
             active_team_limit: DEFAULT_ACTIVE_TEAM_LIMIT,
             health: BATTLE_RUN_HEALTH,
             loss_health_damage: BATTLE_LOSS_HEALTH_DAMAGE,
-            win_gold_reward: BATTLE_WIN_GOLD_REWARD,
             opponent_rounds: Vec::new(),
             shop_pool: default_shop_pool(),
         }
     }
 }
 
-fn default_shop_pool() -> Vec<BattleChimeraOffer> {
+fn default_shop_pool() -> Vec<BattleShopItem> {
     vec![
-        BattleChimeraOffer::new(
+        BattleShopItem::Chimera(BattleChimeraOffer::new(
             "Workaholic",
             BattleRarity::White,
             5,
             5,
             vec![BattleAbilityId("workaholic")],
-        ),
-        BattleChimeraOffer::new(
+        )),
+        BattleShopItem::Chimera(BattleChimeraOffer::new(
             "Tough Cookie",
             BattleRarity::White,
             2,
             10,
             vec![BattleAbilityId("tough_cookie")],
-        ),
-        BattleChimeraOffer::new(
+        )),
+        BattleShopItem::Chimera(BattleChimeraOffer::new(
             "Healer",
             BattleRarity::White,
             2,
             6,
             vec![BattleAbilityId("soothing_care")],
-        ),
-        BattleChimeraOffer::new(
+        )),
+        BattleShopItem::Chimera(BattleChimeraOffer::new(
             "Little Villain",
             BattleRarity::White,
             1,
             2,
             vec![BattleAbilityId("little_villain")],
-        ),
+        )),
+        BattleShopItem::Equipment(BattleEquipmentOffer::new(
+            "Training Collar",
+            BattleRarity::White,
+            1,
+            2,
+        )),
     ]
 }
 

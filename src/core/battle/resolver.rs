@@ -681,6 +681,7 @@ fn queue_summon(
             hp,
         },
         abilities: abilities.to_vec(),
+        equipment: Vec::new(),
     };
     state.team_mut(side).summon_queue.push(chimera);
     outcome.push_event(BattleEvent::ChimeraQueued {

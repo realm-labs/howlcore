@@ -6,8 +6,9 @@ use crate::{
     app_state::AppMode,
     core::{
         battle::{
-            BattleDefinition, BattleLeaderEffect, BattleRunPhase, BattleRunState, BattleRunStep,
-            BattleState, PurchaseOutcome, TeamSide, resolver::front_chimera_id,
+            BattleDefinition, BattleLeaderEffect, BattleRunPhase, BattleRunReward, BattleRunState,
+            BattleRunStep, BattleShopItem, BattleState, PurchaseOutcome, TeamSide,
+            resolver::front_chimera_id,
         },
         work::{CombatState, StageDefinition},
     },
@@ -146,7 +147,7 @@ fn setup_ui_system(mut commands: Commands) {
                 spawn_panel(columns, "Log", 0.9, 0.82, 0.72, LogText);
             });
             root.spawn(TextBundle::from_section(
-                "Tab: switch mode    Space: advance/start battle    1-3: buy    R: refresh shop    Q/W/E: swap lineup    B/V: bench/deploy    N: reset    Up/Down/Page: scroll log    End: latest    Esc: quit",
+                "Tab: switch mode    Space: advance/start battle    1-3: buy    R: refresh shop    Q/W/E: swap lineup    B/V: bench/deploy    Z: equip    N: reset    Up/Down/Page: scroll log    End: latest    Esc: quit",
                 TextStyle {
                     font_size: 16.0,
                     color: Color::srgb(0.58, 0.62, 0.66),
@@ -341,6 +342,17 @@ fn handle_battle_draft_input(
         }
         logs.battle_offset = 0;
     }
+
+    if keys.just_pressed(KeyCode::KeyZ) {
+        match gameplay.battle.draft.equip_inventory_item(0, 0) {
+            Ok(outcome) => logs.battle.push(format!(
+                "Draft: equipped {} on {}.",
+                outcome.equipment_name, outcome.chimera_name
+            )),
+            Err(error) => logs.battle.push(format!("Draft equip error: {error:?}.")),
+        }
+        logs.battle_offset = 0;
+    }
 }
 
 fn reset_active_mode(gameplay: &mut GameplayResource, logs: &mut UiLogs) {
@@ -459,6 +471,9 @@ fn format_purchase_outcome(outcome: PurchaseOutcome) -> String {
         PurchaseOutcome::Added { chimera_name } => format!("Draft: bought {chimera_name}."),
         PurchaseOutcome::AddedToBench { chimera_name } => {
             format!("Draft: bought {chimera_name} to bench.")
+        }
+        PurchaseOutcome::EquipmentStored { equipment_name } => {
+            format!("Draft: bought equipment {equipment_name}.")
         }
         PurchaseOutcome::Merged {
             chimera_name,
@@ -623,15 +638,26 @@ fn format_draft_chimeras(run: &BattleRunState) -> String {
     let active_entries = chimeras
         .into_iter()
         .map(|chimera| {
+            let equipment = if chimera.equipment.is_empty() {
+                "none".to_string()
+            } else {
+                chimera
+                    .equipment
+                    .iter()
+                    .map(|equipment| equipment.name.clone())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
             format!(
-                "  {}  slot {}\n    HP {}/{}  ATK {}  Lv{}  XP {}",
+                "  {}  slot {}\n    HP {}/{}  ATK {}  Lv{}  XP {}  Eq: {}",
                 chimera.name,
                 chimera.slot,
                 chimera.stats.hp,
                 chimera.stats.max_hp,
                 chimera.stats.attack,
                 chimera.level,
-                chimera.experience
+                chimera.experience,
+                equipment
             )
         })
         .collect::<Vec<_>>()
@@ -660,8 +686,29 @@ fn format_draft_chimeras(run: &BattleRunState) -> String {
             .join("\n")
     };
 
+    let equipment_entries = if run.draft.equipment_inventory.is_empty() {
+        "  empty".to_string()
+    } else {
+        run.draft
+            .equipment_inventory
+            .iter()
+            .enumerate()
+            .map(|(index, equipment)| {
+                format!(
+                    "  {}. {}  ATK +{}  HP +{}  {:?}",
+                    index + 1,
+                    equipment.name,
+                    equipment.attack,
+                    equipment.hp,
+                    equipment.rarity
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
     format!(
-        "Draft Team - {} ({}/{})\n{active_entries}\n\nBench\n{bench_entries}",
+        "Draft Team - {} ({}/{})\n{active_entries}\n\nBench\n{bench_entries}\n\nEquipment Inventory\n{equipment_entries}",
         team.name,
         team.chimeras.len(),
         run.draft.active_team_limit
@@ -750,16 +797,7 @@ fn format_run_details(run: &BattleRunState) -> String {
                     .shop
                     .iter()
                     .enumerate()
-                    .map(|(index, offer)| {
-                        format!(
-                            "{}. {}  ATK {}  HP {}  {:?}",
-                            index + 1,
-                            offer.name,
-                            offer.attack,
-                            offer.hp,
-                            offer.rarity
-                        )
-                    })
+                    .map(|(index, item)| format!("{}. {}", index + 1, format_shop_item(item)))
                     .collect::<Vec<_>>()
                     .join("\n")
             };
@@ -770,14 +808,14 @@ fn format_run_details(run: &BattleRunState) -> String {
             let opponent_kind = opponent
                 .map(|opponent| if opponent.is_boss { "boss" } else { "normal" })
                 .unwrap_or("none");
-            let win_reward = opponent
-                .map(|opponent| opponent.win_gold_reward)
-                .unwrap_or(run.win_gold_reward);
+            let win_rewards = opponent
+                .map(|opponent| format_win_rewards(&opponent.win_rewards))
+                .unwrap_or_else(|| "none".to_string());
             let loss_damage = opponent
                 .map(|opponent| opponent.loss_health_damage)
                 .unwrap_or(run.loss_health_damage);
             format!(
-                "Draft\n  Leader: {}\n  Health: {}/{}\n  Gold: {}\n  Active lineup: {}/{}\n  Bench: {}\n  Next opponent: {opponent_name} ({opponent_kind})\n  Win reward: {win_reward} gold\n  Loss damage: {loss_damage} health\n  Press Space to start battle.\n\nLeader Effects\n{}\n\nShop\n{shop}",
+                "Draft\n  Leader: {}\n  Health: {}/{}\n  Gold: {}\n  Active lineup: {}/{}\n  Bench: {}\n  Next opponent: {opponent_name} ({opponent_kind})\n  Win rewards: {win_rewards}\n  Loss damage: {loss_damage} health\n  Press Space to start battle.\n\nLeader Effects\n{}\n\nShop\n{shop}",
                 leader_name(run),
                 run.health,
                 run.max_health,
@@ -801,6 +839,35 @@ fn format_run_details(run: &BattleRunState) -> String {
         ),
         (BattleRunPhase::Battle, None) => "Battle is preparing.".to_string(),
     }
+}
+
+fn format_shop_item(item: &BattleShopItem) -> String {
+    match item {
+        BattleShopItem::Chimera(offer) => format!(
+            "{}  Chimera  ATK {}  HP {}  {:?}",
+            offer.name, offer.attack, offer.hp, offer.rarity
+        ),
+        BattleShopItem::Equipment(offer) => format!(
+            "{}  Equipment  ATK +{}  HP +{}  {:?}",
+            offer.name, offer.attack, offer.hp, offer.rarity
+        ),
+    }
+}
+
+fn format_win_rewards(rewards: &[BattleRunReward]) -> String {
+    if rewards.is_empty() {
+        return "none".to_string();
+    }
+
+    rewards
+        .iter()
+        .map(|reward| match reward {
+            BattleRunReward::AddGold { amount } => format!("{amount} gold"),
+            BattleRunReward::HealRun { amount } => format!("heal {amount} health"),
+            BattleRunReward::AddShopItem { item } => format!("shop item {}", item.name()),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn leader_name(run: &BattleRunState) -> &str {

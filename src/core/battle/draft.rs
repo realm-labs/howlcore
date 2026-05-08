@@ -5,6 +5,7 @@ use crate::core::battle::{
 };
 
 pub const CHIMERA_PURCHASE_COST: i32 = 3;
+pub const EQUIPMENT_PURCHASE_COST: i32 = 2;
 pub const DEFAULT_ACTIVE_TEAM_LIMIT: usize = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,12 +19,37 @@ pub struct BattleChimeraOffer {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BattleEquipment {
+    pub name: String,
+    pub rarity: BattleRarity,
+    pub attack: i32,
+    pub hp: i32,
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BattleEquipmentOffer {
+    pub name: String,
+    pub rarity: BattleRarity,
+    pub attack: i32,
+    pub hp: i32,
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BattleShopItem {
+    Chimera(BattleChimeraOffer),
+    Equipment(BattleEquipmentOffer),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DraftState {
     pub gold: i32,
     pub team: BattleTeam,
     pub bench: Vec<BattleChimera>,
+    pub equipment_inventory: Vec<BattleEquipment>,
     pub active_team_limit: usize,
-    pub shop: Vec<BattleChimeraOffer>,
+    pub shop: Vec<BattleShopItem>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,6 +60,7 @@ pub enum DraftError {
     InvalidBenchIndex { index: usize },
     ActiveLineupFull { limit: usize },
     ActiveLineupTooSmall,
+    InvalidEquipmentIndex { index: usize },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,6 +76,15 @@ pub enum PurchaseOutcome {
         level_before: u32,
         level_after: u32,
     },
+    EquipmentStored {
+        equipment_name: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EquipOutcome {
+    pub equipment_name: String,
+    pub chimera_name: String,
 }
 
 impl BattleChimeraOffer {
@@ -70,6 +106,34 @@ impl BattleChimeraOffer {
     }
 }
 
+impl BattleEquipmentOffer {
+    pub fn new(name: impl Into<String>, rarity: BattleRarity, attack: i32, hp: i32) -> Self {
+        Self {
+            name: name.into(),
+            rarity,
+            attack,
+            hp,
+            tags: Vec::new(),
+        }
+    }
+}
+
+impl BattleShopItem {
+    pub fn cost(&self) -> i32 {
+        match self {
+            Self::Chimera(_) => CHIMERA_PURCHASE_COST,
+            Self::Equipment(_) => EQUIPMENT_PURCHASE_COST,
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Chimera(offer) => &offer.name,
+            Self::Equipment(offer) => &offer.name,
+        }
+    }
+}
+
 impl DraftState {
     pub fn new(gold: i32, side: TeamSide, team_name: impl Into<String>) -> Self {
         Self {
@@ -81,6 +145,7 @@ impl DraftState {
                 summon_queue: Vec::new(),
             },
             bench: Vec::new(),
+            equipment_inventory: Vec::new(),
             active_team_limit: DEFAULT_ACTIVE_TEAM_LIMIT,
             shop: Vec::new(),
         }
@@ -96,16 +161,30 @@ impl DraftState {
             return Err(DraftError::InvalidOfferIndex { index });
         }
 
-        if self.gold < CHIMERA_PURCHASE_COST {
+        let cost = self.shop[index].cost();
+        if self.gold < cost {
             return Err(DraftError::NotEnoughGold {
-                cost: CHIMERA_PURCHASE_COST,
+                cost,
                 available: self.gold,
             });
         }
 
-        self.gold -= CHIMERA_PURCHASE_COST;
-        let offer = self.shop.remove(index);
+        self.gold -= cost;
+        let item = self.shop.remove(index);
+        match item {
+            BattleShopItem::Chimera(offer) => self.purchase_chimera(offer),
+            BattleShopItem::Equipment(offer) => {
+                let equipment_name = offer.name.clone();
+                self.equipment_inventory.push(offer.into_equipment());
+                Ok(PurchaseOutcome::EquipmentStored { equipment_name })
+            }
+        }
+    }
 
+    fn purchase_chimera(
+        &mut self,
+        offer: BattleChimeraOffer,
+    ) -> Result<PurchaseOutcome, DraftError> {
         if let Some(existing) = self.find_chimera_mut(&offer.name) {
             let level_before = existing.level;
             merge_duplicate(existing);
@@ -125,6 +204,37 @@ impl DraftState {
             self.bench.push(offer.into_chimera(0));
             Ok(PurchaseOutcome::AddedToBench { chimera_name })
         }
+    }
+
+    pub fn equip_inventory_item(
+        &mut self,
+        equipment_index: usize,
+        active_position: usize,
+    ) -> Result<EquipOutcome, DraftError> {
+        if equipment_index >= self.equipment_inventory.len() {
+            return Err(DraftError::InvalidEquipmentIndex {
+                index: equipment_index,
+            });
+        }
+
+        let active_indices = sorted_active_indices(&self.team);
+        let Some(&team_index) = active_indices.get(active_position) else {
+            return Err(DraftError::InvalidTeamIndex {
+                index: active_position,
+            });
+        };
+
+        let equipment = self.equipment_inventory.remove(equipment_index);
+        let equipment_name = equipment.name.clone();
+        let chimera = &mut self.team.chimeras[team_index];
+        chimera.stats.attack += equipment.attack;
+        chimera.stats.max_hp += equipment.hp;
+        chimera.stats.hp += equipment.hp;
+        chimera.equipment.push(equipment);
+        Ok(EquipOutcome {
+            equipment_name,
+            chimera_name: chimera.name.clone(),
+        })
     }
 
     pub fn swap_active_positions(
@@ -214,6 +324,19 @@ impl BattleChimeraOffer {
                 hp: self.hp,
             },
             abilities: self.abilities,
+            equipment: Vec::new(),
+        }
+    }
+}
+
+impl BattleEquipmentOffer {
+    fn into_equipment(self) -> BattleEquipment {
+        BattleEquipment {
+            name: self.name,
+            rarity: self.rarity,
+            attack: self.attack,
+            hp: self.hp,
+            tags: self.tags,
         }
     }
 }

@@ -3,7 +3,7 @@ use crate::{
         battle_config::load_test_battle_result,
         battles::{KIND_PRAISER, TOUGH_COOKIE},
     },
-    core::battle::BattleTrigger,
+    core::battle::{BattleRunReward, BattleTrigger},
 };
 
 #[test]
@@ -21,8 +21,12 @@ fn test_battle_should_load_from_ron_config() {
     assert_eq!(battle.run.active_team_limit, 4);
     assert_eq!(battle.run.opponent_rounds.len(), 3);
     assert_eq!(battle.run.opponent_rounds[0].name, "Opening Match");
+    assert_eq!(
+        battle.run.opponent_rounds[0].win_rewards[0],
+        BattleRunReward::AddGold { amount: 3 }
+    );
     assert!(battle.run.opponent_rounds[2].is_boss);
-    assert_eq!(battle.run.shop_pool.len(), 4);
+    assert_eq!(battle.run.shop_pool.len(), 5);
     assert!(
         battle
             .ability_database

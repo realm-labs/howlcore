@@ -12,14 +12,15 @@ pub use data::{
     BattleTrigger,
 };
 pub use draft::{
-    BattleChimeraOffer, CHIMERA_PURCHASE_COST, DEFAULT_ACTIVE_TEAM_LIMIT, DraftError, DraftState,
-    PurchaseOutcome,
+    BattleChimeraOffer, BattleEquipment, BattleEquipmentOffer, BattleShopItem,
+    CHIMERA_PURCHASE_COST, DEFAULT_ACTIVE_TEAM_LIMIT, DraftError, DraftState,
+    EQUIPMENT_PURCHASE_COST, EquipOutcome, PurchaseOutcome,
 };
 pub use event::{BattleEvent, BattleOutcome};
 pub use model::{
     BattleChimera, BattleChimeraId, BattleDefinition, BattleLeader, BattleLeaderEffect,
-    BattleOpponentRound, BattleRarity, BattleRng, BattleRunConfig, BattleState, BattleStats,
-    BattleTeam, TeamSide,
+    BattleOpponentRound, BattleRarity, BattleRng, BattleRunConfig, BattleRunReward, BattleState,
+    BattleStats, BattleTeam, TeamSide,
 };
 pub use run::{
     BATTLE_LOSS_HEALTH_DAMAGE, BATTLE_RUN_HEALTH, BATTLE_SHOP_SIZE, BATTLE_STARTING_GOLD,
