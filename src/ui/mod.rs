@@ -58,8 +58,16 @@ struct GameplayResource {
 struct UiLogs {
     work: Vec<String>,
     battle: Vec<String>,
+    battle_pending: Vec<BattlePlaybackFrame>,
+    battle_display: Option<BattleState>,
     work_offset: usize,
     battle_offset: usize,
+}
+
+#[derive(Clone)]
+struct BattlePlaybackFrame {
+    line: String,
+    battle: Option<BattleState>,
 }
 
 #[derive(Component)]
@@ -123,6 +131,8 @@ pub fn build_app(stage: StageDefinition, battle: BattleDefinition) -> App {
     .insert_resource(UiLogs {
         work: work_logs,
         battle: battle_logs,
+        battle_pending: Vec::new(),
+        battle_display: None,
         work_offset: 0,
         battle_offset: 0,
     })
@@ -528,20 +538,29 @@ fn advance_active_mode(gameplay: &mut GameplayResource, logs: &mut UiLogs) {
             }
         }
         AppMode::ChimeraBattle => {
+            if reveal_next_battle_playback_line(logs) {
+                return;
+            }
+
             let previous_battle = gameplay.battle.battle.clone();
             let step_result = gameplay.battle.step();
             let was_following = logs.battle_offset == 0;
             match step_result {
                 Ok((step, outcome)) => {
-                    let trigger_lines = format_battle_trigger_events(
+                    let playback_frames = format_battle_playback_frames(
+                        step,
                         &outcome,
                         previous_battle.as_ref(),
                         gameplay.battle.battle.as_ref(),
                         &gameplay.battle.ability_database,
                     );
-                    logs.battle.extend(format_battle_run_step(step));
-                    logs.battle.extend(trigger_lines);
-                    logs.battle.extend(outcome.logs);
+                    if playback_frames.is_empty() {
+                        logs.battle
+                            .push("Battle run: no visible event.".to_string());
+                    } else {
+                        logs.battle_pending = playback_frames;
+                        reveal_next_battle_playback_line(logs);
+                    }
                 }
                 Err(error) => {
                     logs.battle.push(format!("Battle run error: {error:?}."));
@@ -552,6 +571,20 @@ fn advance_active_mode(gameplay: &mut GameplayResource, logs: &mut UiLogs) {
             }
         }
     }
+}
+
+fn reveal_next_battle_playback_line(logs: &mut UiLogs) -> bool {
+    if logs.battle_pending.is_empty() {
+        return false;
+    }
+
+    let frame = logs.battle_pending.remove(0);
+    logs.battle.push(frame.line);
+    if let Some(battle) = frame.battle {
+        logs.battle_display = Some(battle);
+    }
+    logs.battle_offset = 0;
+    true
 }
 
 fn handle_work_prep_input(
@@ -724,6 +757,8 @@ fn reset_active_mode(gameplay: &mut GameplayResource, logs: &mut UiLogs) {
         AppMode::ChimeraBattle => {
             gameplay.battle = BattleRunState::from_definition(gameplay.battle_definition.clone());
             logs.battle = gameplay.battle_definition.initial_logs.clone();
+            logs.battle_pending.clear();
+            logs.battle_display = None;
             logs.battle.push("Chimera Battle run reset.".to_string());
             logs.battle_offset = 0;
         }
@@ -732,24 +767,27 @@ fn reset_active_mode(gameplay: &mut GameplayResource, logs: &mut UiLogs) {
 
 fn update_round_text_system(
     gameplay: Res<GameplayResource>,
+    logs: Res<UiLogs>,
     mut round_text: Query<&mut Text, With<RoundText>>,
 ) {
-    set_text(&mut round_text, format_header(&gameplay));
+    set_text(&mut round_text, format_header(&gameplay, &logs));
 }
 
 fn update_score_text_system(
     gameplay: Res<GameplayResource>,
+    logs: Res<UiLogs>,
     mut score_text: Query<&mut Text, With<ScoreText>>,
 ) {
-    set_text(&mut score_text, format_score_line(&gameplay));
+    set_text(&mut score_text, format_score_line(&gameplay, &logs));
 }
 
 fn rebuild_board_system(
     mut commands: Commands,
     gameplay: Res<GameplayResource>,
+    logs: Res<UiLogs>,
     board_root: Query<Entity, With<BoardRoot>>,
 ) {
-    if !gameplay.is_changed() {
+    if !gameplay.is_changed() && !logs.is_changed() {
         return;
     }
 
@@ -762,7 +800,7 @@ fn rebuild_board_system(
         .entity(root)
         .with_children(|root| match gameplay.mode {
             AppMode::WorkAssignment => spawn_work_board(root, &gameplay.work),
-            AppMode::ChimeraBattle => spawn_battle_board(root, &gameplay.battle),
+            AppMode::ChimeraBattle => spawn_battle_board(root, &gameplay.battle, &logs),
         });
 }
 
@@ -987,8 +1025,10 @@ fn spawn_work_board(parent: &mut ChildBuilder, run: &WorkRunState) {
     }
 }
 
-fn spawn_battle_board(parent: &mut ChildBuilder, run: &BattleRunState) {
-    match (&run.phase, &run.battle) {
+fn spawn_battle_board(parent: &mut ChildBuilder, run: &BattleRunState, logs: &UiLogs) {
+    let display_battle = logs.battle_display.as_ref().or(run.battle.as_ref());
+
+    match (&run.phase, display_battle) {
         (BattleRunPhase::Draft, _) => spawn_battle_draft_board(parent, run),
         (BattleRunPhase::Battle, Some(state)) => spawn_battle_combat_board(parent, state),
         (BattleRunPhase::Complete, _) => spawn_board_section(parent, "Run Complete", |section| {
@@ -1746,16 +1786,17 @@ fn format_battle_run_step(step: BattleRunStep) -> Vec<String> {
     }
 }
 
-fn format_battle_trigger_events(
+fn format_battle_playback_frames(
+    step: BattleRunStep,
     outcome: &BattleOutcome,
     previous_state: Option<&BattleState>,
     current_state: Option<&BattleState>,
     abilities: &BattleAbilityDatabase,
-) -> Vec<String> {
-    outcome
-        .events
-        .iter()
-        .filter_map(|event| match event {
+) -> Vec<BattlePlaybackFrame> {
+    let mut trigger_groups = Vec::<Vec<String>>::new();
+
+    for event in &outcome.events {
+        match event {
             BattleEvent::AbilityTriggered { source, ability } => {
                 let source_name = previous_state
                     .and_then(|state| state.chimera(*source))
@@ -1774,24 +1815,176 @@ fn format_battle_trigger_events(
                     })
                     .unwrap_or_else(|| ability.0.to_string());
 
-                Some(format!(
+                trigger_groups.push(vec![format!(
                     "Trigger: {} {} -> {}",
                     side_label(source.side),
                     source_name,
                     ability_text
-                ))
+                )]);
             }
             BattleEvent::ChanceRolled {
                 percent,
                 roll,
                 success,
-            } => Some(format!(
-                "Trigger roll: {percent}% rolled {roll} => {}",
-                if *success { "success" } else { "miss" }
-            )),
-            _ => None,
+            } => {
+                if let Some(group) = trigger_groups.last_mut() {
+                    group.push(format!(
+                        "Trigger roll: {percent}% rolled {roll} => {}",
+                        if *success { "success" } else { "miss" }
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut frames = format_battle_run_step(step)
+        .into_iter()
+        .map(|line| BattlePlaybackFrame {
+            line,
+            battle: current_state.cloned().or_else(|| previous_state.cloned()),
         })
-        .collect()
+        .collect::<Vec<_>>();
+
+    let mut visual = previous_state.cloned().or_else(|| current_state.cloned());
+    let mut event_index = 0;
+    for line in &outcome.logs {
+        if line.contains(" used ") && !trigger_groups.is_empty() {
+            frames.extend(
+                trigger_groups
+                    .remove(0)
+                    .into_iter()
+                    .map(|line| BattlePlaybackFrame {
+                        line,
+                        battle: visual.clone(),
+                    }),
+            );
+        } else {
+            advance_visual_battle_for_log(
+                &mut visual,
+                &outcome.events,
+                &mut event_index,
+                line,
+                current_state,
+            );
+            frames.push(BattlePlaybackFrame {
+                line: line.clone(),
+                battle: visual.clone(),
+            });
+        }
+    }
+
+    for group in trigger_groups {
+        frames.extend(group.into_iter().map(|line| BattlePlaybackFrame {
+            line,
+            battle: visual.clone(),
+        }));
+    }
+
+    frames
+}
+
+fn advance_visual_battle_for_log(
+    visual: &mut Option<BattleState>,
+    events: &[BattleEvent],
+    event_index: &mut usize,
+    line: &str,
+    current_state: Option<&BattleState>,
+) {
+    let wanted = if line.contains("Turn started") {
+        Some("turn")
+    } else if line.contains(" took ") && line.contains(" damage") {
+        Some("damage")
+    } else if line.contains("restored") {
+        Some("heal")
+    } else if line.contains("attack changed") {
+        Some("attack")
+    } else if line.contains("swapped positions") {
+        Some("swap")
+    } else if line.contains("joined") {
+        Some("summon")
+    } else if line.contains("Battle ended") {
+        Some("end")
+    } else {
+        None
+    };
+
+    let Some(wanted) = wanted else {
+        return;
+    };
+
+    while *event_index < events.len() {
+        let event = &events[*event_index];
+        *event_index += 1;
+        if visual_event_kind(event) == Some(wanted) {
+            apply_visual_battle_event(visual, event, current_state);
+            break;
+        }
+    }
+}
+
+fn visual_event_kind(event: &BattleEvent) -> Option<&'static str> {
+    match event {
+        BattleEvent::TurnStarted { .. } => Some("turn"),
+        BattleEvent::DamageDealt { .. } => Some("damage"),
+        BattleEvent::HpRestored { .. } => Some("heal"),
+        BattleEvent::AttackChanged { .. } => Some("attack"),
+        BattleEvent::PositionSwapped { .. } => Some("swap"),
+        BattleEvent::ChimeraSummoned { .. } => Some("summon"),
+        BattleEvent::BattleEnded { .. } => Some("end"),
+        _ => None,
+    }
+}
+
+fn apply_visual_battle_event(
+    visual: &mut Option<BattleState>,
+    event: &BattleEvent,
+    current_state: Option<&BattleState>,
+) {
+    let Some(state) = visual else {
+        return;
+    };
+
+    match event {
+        BattleEvent::TurnStarted { turn } => state.turn = *turn,
+        BattleEvent::DamageDealt { target, amount } => {
+            if let Some(chimera) = state.chimera_mut(*target) {
+                chimera.stats.hp = (chimera.stats.hp - amount).max(0);
+            }
+        }
+        BattleEvent::HpRestored { target, amount } => {
+            if let Some(chimera) = state.chimera_mut(*target) {
+                chimera.stats.hp = (chimera.stats.hp + amount).min(chimera.stats.max_hp);
+            }
+        }
+        BattleEvent::AttackChanged { target, amount } => {
+            if let Some(chimera) = state.chimera_mut(*target) {
+                chimera.stats.attack = (chimera.stats.attack + amount).max(0);
+            }
+        }
+        BattleEvent::PositionSwapped { first, second } => {
+            if first.side == second.side {
+                let team = state.team_mut(first.side);
+                if first.index < team.chimeras.len() && second.index < team.chimeras.len() {
+                    let first_slot = team.chimeras[first.index].slot;
+                    team.chimeras[first.index].slot = team.chimeras[second.index].slot;
+                    team.chimeras[second.index].slot = first_slot;
+                }
+            }
+        }
+        BattleEvent::ChimeraSummoned { chimera } => {
+            if state.chimera(*chimera).is_none()
+                && let Some(source) = current_state.and_then(|current| current.chimera(*chimera))
+            {
+                state.team_mut(chimera.side).chimeras.push(source.clone());
+            }
+        }
+        BattleEvent::BattleEnded { winner } => {
+            state.is_finished = true;
+            state.winner = *winner;
+        }
+        _ => {}
+    }
 }
 
 fn format_purchase_outcome(outcome: PurchaseOutcome) -> String {
@@ -1817,7 +2010,7 @@ fn format_purchase_outcome(outcome: PurchaseOutcome) -> String {
     }
 }
 
-fn format_header(gameplay: &GameplayResource) -> String {
+fn format_header(gameplay: &GameplayResource, logs: &UiLogs) -> String {
     match gameplay.mode {
         AppMode::WorkAssignment => {
             let run = &gameplay.work;
@@ -1840,7 +2033,8 @@ fn format_header(gameplay: &GameplayResource) -> String {
         }
         AppMode::ChimeraBattle => {
             let run = &gameplay.battle;
-            match (&run.phase, &run.battle) {
+            let display_battle = logs.battle_display.as_ref().or(run.battle.as_ref());
+            match (&run.phase, display_battle) {
                 (BattleRunPhase::Battle, Some(state)) => format!(
                     "Chimera Battle - Turn {}/{}{}",
                     state.turn,
@@ -1860,7 +2054,7 @@ fn format_header(gameplay: &GameplayResource) -> String {
     }
 }
 
-fn format_score_line(gameplay: &GameplayResource) -> String {
+fn format_score_line(gameplay: &GameplayResource, logs: &UiLogs) -> String {
     match gameplay.mode {
         AppMode::WorkAssignment => {
             let run = &gameplay.work;
@@ -1879,7 +2073,7 @@ fn format_score_line(gameplay: &GameplayResource) -> String {
         }
         AppMode::ChimeraBattle => {
             let run = &gameplay.battle;
-            match &run.battle {
+            match logs.battle_display.as_ref().or(run.battle.as_ref()) {
                 Some(state) => format_battle_score(state, run),
                 None => format!(
                     "Phase: {:?}    Leader: {}    Health: {}/{}    Gold: {}    Wins: {}    Losses: {}    Battle: {}/{}",
