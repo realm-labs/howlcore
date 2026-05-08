@@ -1,6 +1,7 @@
 use crate::core::work::{
     ActiveEffects, Chimera, StageDefinition, Stats, TaskProgress, TraitDatabase,
-    WorkOvertimeConfig, WorkReviewPeriod, WorkRunConfig, WorkRunPhase, WorkRunState, WorkTask,
+    WorkOvertimeConfig, WorkReviewPeriod, WorkRunConfig, WorkRunError, WorkRunPhase, WorkRunState,
+    WorkTask,
 };
 
 fn chimera(stamina: i32, efficiency: i32) -> Chimera {
@@ -125,8 +126,65 @@ fn overtime_should_carry_stamina_between_cleared_cycles() {
 
     let _ = run.step();
 
-    assert_eq!(run.phase, WorkRunPhase::Overtime);
-    assert_eq!(run.overtime_cycle, 2);
+    assert_eq!(run.phase, WorkRunPhase::OvertimePrep);
+    assert_eq!(run.overtime_cycle, 1);
     assert_eq!(run.overtime_cookies, 10);
     assert_eq!(run.assignment.chimeras[0].stats.stamina, 3);
+
+    let _ = run.step();
+
+    assert_eq!(run.phase, WorkRunPhase::Overtime);
+    assert_eq!(run.overtime_cycle, 2);
+    assert_eq!(run.assignment.chimeras[0].stats.stamina, 3);
+}
+
+#[test]
+fn overtime_prep_should_allow_reordering_before_next_cycle() {
+    let run_config = WorkRunConfig {
+        starting_rank: 1,
+        review_periods: Vec::new(),
+        overtime: Some(WorkOvertimeConfig {
+            max_round: 3,
+            required_progress_growth: 0,
+            stamina_cost_growth_every: 0,
+            cookie_reward_growth: 0,
+            tasks: vec![task("Overtime", 4, 2, 10)],
+        }),
+    };
+    let mut custom_stage = stage(run_config);
+    custom_stage.chimeras = vec![chimera(5, 8), chimera(5, 8)];
+    custom_stage.chimeras[0].name = "Left".to_string();
+    custom_stage.chimeras[0].slot = 0;
+    custom_stage.chimeras[1].name = "Right".to_string();
+    custom_stage.chimeras[1].slot = 1;
+    let mut run = WorkRunState::from_stage(custom_stage);
+
+    let _ = run.step();
+    run.swap_overtime_positions(0, 1).unwrap();
+
+    assert_eq!(run.assignment.chimeras[0].slot, 1);
+    assert_eq!(run.assignment.chimeras[1].slot, 0);
+}
+
+#[test]
+fn overtime_prep_should_reject_disabling_last_active_chimera() {
+    let run_config = WorkRunConfig {
+        starting_rank: 1,
+        review_periods: Vec::new(),
+        overtime: Some(WorkOvertimeConfig {
+            max_round: 3,
+            required_progress_growth: 0,
+            stamina_cost_growth_every: 0,
+            cookie_reward_growth: 0,
+            tasks: vec![task("Overtime", 4, 2, 10)],
+        }),
+    };
+    let mut run = WorkRunState::from_stage(stage(run_config));
+
+    let _ = run.step();
+
+    assert_eq!(
+        run.toggle_overtime_chimera(0),
+        Err(WorkRunError::ActiveLineupTooSmall)
+    );
 }

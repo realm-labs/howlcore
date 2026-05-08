@@ -9,7 +9,16 @@ use crate::core::work::{
 pub enum WorkRunPhase {
     Review,
     Overtime,
+    OvertimePrep,
     Complete,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkRunError {
+    InvalidPhase,
+    InvalidChimeraPosition { index: usize },
+    ActiveLineupTooSmall,
+    ExhaustedChimera,
 }
 
 #[derive(Debug, Clone)]
@@ -81,6 +90,11 @@ impl WorkRunState {
             return outcome;
         }
 
+        if self.phase == WorkRunPhase::OvertimePrep {
+            self.start_overtime_from_prep(&mut outcome);
+            return outcome;
+        }
+
         if self.assignment.is_finished {
             self.resolve_finished_assignment(&mut outcome);
             return outcome;
@@ -101,6 +115,7 @@ impl WorkRunState {
         match self.phase {
             WorkRunPhase::Review => self.resolve_review_period(outcome),
             WorkRunPhase::Overtime => self.resolve_overtime_cycle(outcome),
+            WorkRunPhase::OvertimePrep => self.start_overtime_from_prep(outcome),
             WorkRunPhase::Complete => {}
         }
     }
@@ -149,18 +164,12 @@ impl WorkRunState {
             self.overtime_cycle, self.assignment.cookie_score, self.overtime_cookies
         ));
 
-        if all_tasks_completed(&self.assignment) && self.has_usable_overtime_stamina() {
-            let chimeras = self
-                .assignment
-                .chimeras
-                .iter()
-                .cloned()
-                .map(|mut chimera| {
-                    chimera.is_active = chimera.stats.stamina > 0;
-                    chimera
-                })
-                .collect::<Vec<_>>();
-            self.start_overtime_cycle(Some(chimeras));
+        if all_tasks_completed(&self.assignment) && self.has_any_usable_overtime_stamina() {
+            self.phase = WorkRunPhase::OvertimePrep;
+            self.prepare_overtime_chimeras();
+            outcome.push_log(
+                "Overtime prep: adjust chimera order or active workers, then press Space.",
+            );
         } else {
             self.phase = WorkRunPhase::Complete;
             outcome.push_log(format!(
@@ -224,18 +233,118 @@ impl WorkRunState {
         self.assignment.tasks = scale_overtime_tasks(&overtime, self.overtime_cycle);
     }
 
-    fn has_usable_overtime_stamina(&self) -> bool {
+    pub fn swap_overtime_positions(
+        &mut self,
+        left_position: usize,
+        right_position: usize,
+    ) -> Result<(), WorkRunError> {
+        if self.phase != WorkRunPhase::OvertimePrep {
+            return Err(WorkRunError::InvalidPhase);
+        }
+
+        let ordered_indices = sorted_chimera_indices(&self.assignment.chimeras);
+        let Some(&left_index) = ordered_indices.get(left_position) else {
+            return Err(WorkRunError::InvalidChimeraPosition {
+                index: left_position,
+            });
+        };
+        let Some(&right_index) = ordered_indices.get(right_position) else {
+            return Err(WorkRunError::InvalidChimeraPosition {
+                index: right_position,
+            });
+        };
+
+        let left_slot = self.assignment.chimeras[left_index].slot;
+        self.assignment.chimeras[left_index].slot = self.assignment.chimeras[right_index].slot;
+        self.assignment.chimeras[right_index].slot = left_slot;
+        Ok(())
+    }
+
+    pub fn toggle_overtime_chimera(&mut self, position: usize) -> Result<String, WorkRunError> {
+        if self.phase != WorkRunPhase::OvertimePrep {
+            return Err(WorkRunError::InvalidPhase);
+        }
+
+        let ordered_indices = sorted_chimera_indices(&self.assignment.chimeras);
+        let Some(&chimera_index) = ordered_indices.get(position) else {
+            return Err(WorkRunError::InvalidChimeraPosition { index: position });
+        };
+
+        let is_active = self.assignment.chimeras[chimera_index].is_active;
+        if is_active && self.active_overtime_chimera_count() <= 1 {
+            return Err(WorkRunError::ActiveLineupTooSmall);
+        }
+        if !is_active && !self.chimera_has_usable_overtime_stamina(chimera_index) {
+            return Err(WorkRunError::ExhaustedChimera);
+        }
+
+        let chimera = &mut self.assignment.chimeras[chimera_index];
+        chimera.is_active = !chimera.is_active;
+        Ok(chimera.name.clone())
+    }
+
+    fn start_overtime_from_prep(&mut self, outcome: &mut RoundOutcome) {
+        if self.has_active_usable_overtime_stamina() {
+            let chimeras = self.assignment.chimeras.clone();
+            self.start_overtime_cycle(Some(chimeras));
+            outcome.push_log(format!("Overtime cycle {} started.", self.overtime_cycle));
+        } else {
+            self.phase = WorkRunPhase::Complete;
+            outcome.push_log(format!(
+                "Overtime ended after {} cycle(s). Final overtime cookies: {}.",
+                self.overtime_cycle, self.overtime_cookies
+            ));
+        }
+    }
+
+    fn prepare_overtime_chimeras(&mut self) {
+        let minimum_cost = self.minimum_overtime_stamina_cost().unwrap_or_default();
+        for chimera in &mut self.assignment.chimeras {
+            chimera.is_active = chimera.is_active && chimera.stats.stamina >= minimum_cost;
+        }
+    }
+
+    fn has_any_usable_overtime_stamina(&self) -> bool {
         self.assignment.chimeras.iter().any(|chimera| {
-            self.overtime
-                .as_ref()
-                .and_then(|overtime| {
-                    overtime
-                        .tasks
-                        .iter()
-                        .map(|task| task.progress.stamina_cost)
-                        .min()
-                })
+            self.minimum_overtime_stamina_cost()
                 .is_some_and(|minimum_cost| chimera.stats.stamina >= minimum_cost)
+        })
+    }
+
+    fn has_active_usable_overtime_stamina(&self) -> bool {
+        self.assignment.chimeras.iter().any(|chimera| {
+            chimera.is_active
+                && self
+                    .minimum_overtime_stamina_cost()
+                    .is_some_and(|minimum_cost| chimera.stats.stamina >= minimum_cost)
+        })
+    }
+
+    fn chimera_has_usable_overtime_stamina(&self, chimera_index: usize) -> bool {
+        self.assignment
+            .chimeras
+            .get(chimera_index)
+            .is_some_and(|chimera| {
+                self.minimum_overtime_stamina_cost()
+                    .is_some_and(|minimum_cost| chimera.stats.stamina >= minimum_cost)
+            })
+    }
+
+    fn active_overtime_chimera_count(&self) -> usize {
+        self.assignment
+            .chimeras
+            .iter()
+            .filter(|chimera| chimera.is_active)
+            .count()
+    }
+
+    fn minimum_overtime_stamina_cost(&self) -> Option<i32> {
+        self.overtime.as_ref().and_then(|overtime| {
+            overtime
+                .tasks
+                .iter()
+                .map(|task| task.progress.stamina_cost)
+                .min()
         })
     }
 }
@@ -279,4 +388,14 @@ fn scale_overtime_tasks(config: &WorkOvertimeConfig, cycle: u32) -> Vec<WorkTask
             task
         })
         .collect()
+}
+
+fn sorted_chimera_indices(chimeras: &[Chimera]) -> Vec<usize> {
+    let mut indices = chimeras
+        .iter()
+        .enumerate()
+        .map(|(index, chimera)| (index, chimera.slot))
+        .collect::<Vec<_>>();
+    indices.sort_by_key(|(_, slot)| *slot);
+    indices.into_iter().map(|(index, _)| index).collect()
 }

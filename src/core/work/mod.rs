@@ -15,4 +15,4 @@ pub use model::{
     TimedEfficiencyBonus, TimedTrait, TraitDatabase, WorkOvertimeConfig, WorkReviewPeriod,
     WorkRunConfig, WorkTask,
 };
-pub use run::{WorkRunPhase, WorkRunState};
+pub use run::{WorkRunError, WorkRunPhase, WorkRunState};

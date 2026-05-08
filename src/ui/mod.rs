@@ -228,6 +228,8 @@ fn handle_input_system(
 
     if gameplay.mode == AppMode::ChimeraBattle {
         handle_battle_draft_input(&keys, &mut gameplay, &mut logs);
+    } else {
+        handle_work_prep_input(&keys, &mut gameplay, &mut logs);
     }
 
     if keys.just_pressed(KeyCode::Space) {
@@ -268,6 +270,55 @@ fn handle_input_system(
         match gameplay.mode {
             AppMode::WorkAssignment => logs.work_offset = 0,
             AppMode::ChimeraBattle => logs.battle_offset = 0,
+        }
+    }
+}
+
+fn handle_work_prep_input(
+    keys: &ButtonInput<KeyCode>,
+    gameplay: &mut GameplayResource,
+    logs: &mut UiLogs,
+) {
+    if gameplay.work.phase != WorkRunPhase::OvertimePrep {
+        return;
+    }
+
+    for (key, left_position) in [(KeyCode::KeyQ, 0), (KeyCode::KeyW, 1), (KeyCode::KeyE, 2)] {
+        if keys.just_pressed(key) {
+            match gameplay
+                .work
+                .swap_overtime_positions(left_position, left_position + 1)
+            {
+                Ok(()) => logs.work.push(format!(
+                    "Overtime prep: swapped positions {} and {}.",
+                    left_position + 1,
+                    left_position + 2
+                )),
+                Err(error) => logs
+                    .work
+                    .push(format!("Overtime prep swap error: {error:?}.")),
+            }
+            logs.work_offset = 0;
+        }
+    }
+
+    for (key, position) in [
+        (KeyCode::Digit1, 0),
+        (KeyCode::Digit2, 1),
+        (KeyCode::Digit3, 2),
+        (KeyCode::Digit4, 3),
+        (KeyCode::Digit5, 4),
+    ] {
+        if keys.just_pressed(key) {
+            match gameplay.work.toggle_overtime_chimera(position) {
+                Ok(chimera_name) => logs
+                    .work
+                    .push(format!("Overtime prep: toggled {chimera_name}.")),
+                Err(error) => logs
+                    .work
+                    .push(format!("Overtime prep toggle error: {error:?}.")),
+            }
+            logs.work_offset = 0;
         }
     }
 }
@@ -512,6 +563,8 @@ fn format_header(gameplay: &GameplayResource) -> String {
                 state.max_round,
                 if run.phase == WorkRunPhase::Complete {
                     " - Complete"
+                } else if run.phase == WorkRunPhase::OvertimePrep {
+                    " - Prep"
                 } else if state.is_finished {
                     " - Review"
                 } else {
@@ -786,6 +839,10 @@ fn format_work_run_details(run: &WorkRunState) -> String {
         ),
         WorkRunPhase::Overtime => format!(
             "Overtime\n  Cycle: {}\n  Overtime cookies: {}\n  Task growth is active after every clear.",
+            run.overtime_cycle, run.overtime_cookies
+        ),
+        WorkRunPhase::OvertimePrep => format!(
+            "Overtime Prep\n  Completed cycle: {}\n  Overtime cookies: {}\n  Q/W/E: swap adjacent chimeras\n  1-5: toggle active workers\n  Space: start next cycle",
             run.overtime_cycle, run.overtime_cookies
         ),
         WorkRunPhase::Complete => format!(

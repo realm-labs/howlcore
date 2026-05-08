@@ -42,7 +42,8 @@ The two modes intentionally use separate models. Work mode has `efficiency`, `st
 9. If the weekly cookie target is met, the run promotes to the configured ranking target and advances to the next review period.
 10. Reaching Rank 1 unlocks Overtime Mode.
 11. Overtime generates repeating task cycles with growing progress, stamina, and cookie tuning.
-12. Overtime carries the current stamina state between cleared cycles and ends when the team cannot fully clear a cycle.
+12. Clearing an overtime cycle pauses in Overtime Prep, where the player can adjust active workers or reorder the lineup before continuing.
+13. Overtime carries the current stamina state between cleared cycles and ends when the team cannot fully clear a cycle.
 
 ## Chimera Battle Flow
 
