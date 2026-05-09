@@ -2,11 +2,12 @@
 
 use crate::core::battle::{
     data::BattleAbilityId,
-    model::{BattleChimeraId, TeamSide},
+    model::{BattleChimera, BattleChimeraId, TeamSide},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BattleEvent {
+    BattleStarted,
     TurnStarted {
         turn: u32,
     },
@@ -15,21 +16,29 @@ pub enum BattleEvent {
         target: BattleChimeraId,
         damage: i32,
     },
-    DamageDealt {
+    DamageApplied {
         target: BattleChimeraId,
         amount: i32,
+        hp_before: i32,
+        hp_after: i32,
     },
     DamageReduced {
         target: BattleChimeraId,
         amount: i32,
+        damage_before: i32,
+        damage_after: i32,
     },
     HpRestored {
         target: BattleChimeraId,
         amount: i32,
+        hp_before: i32,
+        hp_after: i32,
     },
     AttackChanged {
         target: BattleChimeraId,
         amount: i32,
+        attack_before: i32,
+        attack_after: i32,
     },
     PositionSwapped {
         first: BattleChimeraId,
@@ -37,10 +46,11 @@ pub enum BattleEvent {
     },
     ChimeraQueued {
         side: TeamSide,
-        name: String,
+        chimera: BattleChimera,
     },
     ChimeraSummoned {
         chimera: BattleChimeraId,
+        state: BattleChimera,
     },
     AbilityTriggered {
         source: BattleChimeraId,
@@ -62,14 +72,9 @@ pub enum BattleEvent {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BattleOutcome {
     pub events: Vec<BattleEvent>,
-    pub logs: Vec<String>,
 }
 
 impl BattleOutcome {
-    pub fn push_log(&mut self, line: impl Into<String>) {
-        self.logs.push(line.into());
-    }
-
     pub fn push_event(&mut self, event: BattleEvent) {
         self.events.push(event);
     }

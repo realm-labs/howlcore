@@ -118,10 +118,11 @@ fn run_config(defender: BattleTeam) -> BattleRunConfig {
 fn run_should_start_battle_from_draft_phase() {
     let mut run = BattleRunState::from_definition(battle_definition());
 
-    let (step, outcome) = run.step().unwrap();
+    let outcome = run.step().unwrap();
 
-    assert_eq!(step, BattleRunStep::StartedBattle);
-    assert_eq!(outcome.logs.len(), 0);
+    assert_eq!(outcome.step, BattleRunStep::StartedBattle);
+    assert!(outcome.battle_events.is_empty());
+    assert!(outcome.run_events.is_empty());
     assert_eq!(run.phase, BattleRunPhase::Battle);
     assert!(run.battle.is_some());
 }
@@ -296,7 +297,7 @@ fn run_should_use_configured_opponent_rounds() {
         run.battle.as_ref().map(|battle| battle.name.as_str()),
         Some("Battle 1 - Qualifier")
     );
-    let (_step, _outcome) = run.step().unwrap();
+    let _outcome = run.step().unwrap();
 
     assert_eq!(run.draft.gold, BATTLE_STARTING_GOLD + 7);
     assert_eq!(run.current_opponent().unwrap().name, "Final");
@@ -327,7 +328,7 @@ fn run_should_apply_structured_win_rewards() {
     run.health = BATTLE_RUN_HEALTH - 1;
     run.start_battle().unwrap();
 
-    let (_step, outcome) = run.step().unwrap();
+    let outcome = run.step().unwrap();
 
     assert_eq!(run.draft.gold, BATTLE_STARTING_GOLD + 5);
     assert_eq!(run.health, BATTLE_RUN_HEALTH);
@@ -337,10 +338,17 @@ fn run_should_apply_structured_win_rewards() {
             .iter()
             .any(|item| item.name() == "Workaholic")
     );
-    assert!(outcome.logs.iter().any(|line| line.contains("healed")));
     assert!(
         outcome
-            .logs
+            .timeline
+            .lines()
+            .iter()
+            .any(|line| line.contains("healed"))
+    );
+    assert!(
+        outcome
+            .timeline
+            .lines()
             .iter()
             .any(|line| line.contains("added Workaholic"))
     );
@@ -373,15 +381,21 @@ fn run_should_reward_win_and_return_to_draft_when_defenders_remain() {
     let mut run = BattleRunState::from_definition(battle_definition());
     run.start_battle().unwrap();
 
-    let (step, outcome) = run.step().unwrap();
+    let outcome = run.step().unwrap();
 
     assert_eq!(
-        step,
+        outcome.step,
         BattleRunStep::BattleResolved {
             winner: Some(TeamSide::Challenger)
         }
     );
-    assert!(outcome.logs.iter().any(|line| line.contains("Run reward")));
+    assert!(
+        outcome
+            .timeline
+            .lines()
+            .iter()
+            .any(|line| line.contains("Run reward"))
+    );
     assert_eq!(
         run.draft.gold,
         BATTLE_STARTING_GOLD + BATTLE_WIN_GOLD_REWARD
@@ -394,12 +408,33 @@ fn run_should_reward_win_and_return_to_draft_when_defenders_remain() {
 }
 
 #[test]
+fn run_step_should_emit_timeline_snapshots_for_playback() {
+    let mut run = BattleRunState::from_definition(battle_definition());
+    run.start_battle().unwrap();
+
+    let outcome = run.step().unwrap();
+    let damage_frame = outcome
+        .timeline
+        .frames
+        .iter()
+        .find(|frame| frame.line.contains("Loser took"))
+        .expect("expected defender damage frame");
+    let snapshot = damage_frame
+        .snapshot
+        .as_ref()
+        .expect("damage frame should include a battle snapshot");
+
+    assert_eq!(snapshot.state.defender.chimeras[0].stats.hp, 0);
+    assert_eq!(run.phase, BattleRunPhase::Draft);
+}
+
+#[test]
 fn run_should_finish_after_final_defender_is_defeated() {
     let mut run = BattleRunState::from_definition(battle_definition());
     run.opponents.truncate(1);
     run.start_battle().unwrap();
 
-    let (_step, _outcome) = run.step().unwrap();
+    let _outcome = run.step().unwrap();
 
     assert_eq!(run.wins, 1);
     assert_eq!(run.phase, BattleRunPhase::Complete);
@@ -411,15 +446,21 @@ fn run_should_lose_health_after_defeat() {
     let mut run = BattleRunState::from_definition(losing_battle_definition());
     run.start_battle().unwrap();
 
-    let (step, outcome) = run.step().unwrap();
+    let outcome = run.step().unwrap();
 
     assert_eq!(
-        step,
+        outcome.step,
         BattleRunStep::BattleResolved {
             winner: Some(TeamSide::Defender)
         }
     );
-    assert!(outcome.logs.iter().any(|line| line.contains("Run damage")));
+    assert!(
+        outcome
+            .timeline
+            .lines()
+            .iter()
+            .any(|line| line.contains("Run damage"))
+    );
     assert_eq!(run.health, BATTLE_RUN_HEALTH - BATTLE_LOSS_HEALTH_DAMAGE);
     assert_eq!(run.losses, 1);
     assert_eq!(run.phase, BattleRunPhase::Draft);
@@ -431,7 +472,7 @@ fn run_should_complete_when_health_reaches_zero() {
     run.health = BATTLE_LOSS_HEALTH_DAMAGE;
     run.start_battle().unwrap();
 
-    let (_step, _outcome) = run.step().unwrap();
+    let _outcome = run.step().unwrap();
 
     assert_eq!(run.health, 0);
     assert_eq!(run.phase, BattleRunPhase::Complete);

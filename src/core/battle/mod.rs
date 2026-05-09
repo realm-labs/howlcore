@@ -6,6 +6,7 @@ pub mod event;
 pub mod model;
 pub mod resolver;
 pub mod run;
+pub mod timeline;
 
 pub use data::{
     BattleAbilityDatabase, BattleAbilityDef, BattleAbilityId, BattleEffect, BattleTargetSelector,
@@ -24,6 +25,7 @@ pub use model::{
 };
 pub use run::{
     BATTLE_LOSS_HEALTH_DAMAGE, BATTLE_RUN_HEALTH, BATTLE_SHOP_SIZE, BATTLE_STARTING_GOLD,
-    BATTLE_WIN_GOLD_REWARD, BattleRunError, BattleRunPhase, BattleRunResult, BattleRunState,
-    BattleRunStep,
+    BATTLE_WIN_GOLD_REWARD, BattleRunError, BattleRunEvent, BattleRunPhase, BattleRunResult,
+    BattleRunState, BattleRunStep, BattleRunStepOutcome,
 };
+pub use timeline::{BattleFrameKind, BattleTimeline, BattleTimelineFrame, BattleViewSnapshot};

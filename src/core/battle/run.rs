@@ -2,9 +2,9 @@
 
 use crate::core::battle::{
     BattleAbilityDatabase, BattleAbilityId, BattleChimeraOffer, BattleDefinition,
-    BattleEquipmentOffer, BattleLeader, BattleLeaderEffect, BattleOpponentRound, BattleOutcome,
-    BattleRarity, BattleRng, BattleRunConfig, BattleRunReward, BattleShopItem, BattleState,
-    BattleTeam, DEFAULT_ACTIVE_TEAM_LIMIT, DraftState, TeamSide,
+    BattleEquipmentOffer, BattleLeader, BattleLeaderEffect, BattleOpponentRound, BattleRarity,
+    BattleRng, BattleRunConfig, BattleRunReward, BattleShopItem, BattleState, BattleTeam,
+    BattleTimeline, DEFAULT_ACTIVE_TEAM_LIMIT, DraftState, TeamSide,
 };
 
 pub const BATTLE_WIN_GOLD_REWARD: i32 = 3;
@@ -33,6 +33,35 @@ pub enum BattleRunStep {
     StartedBattle,
     AdvancedBattle,
     BattleResolved { winner: Option<TeamSide> },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BattleRunEvent {
+    RunHealthLost {
+        amount: i32,
+        health_after: i32,
+        max_health: i32,
+    },
+    GoldRewarded {
+        amount: i32,
+        gold_after: i32,
+    },
+    RunHealed {
+        amount: i32,
+        health_after: i32,
+        max_health: i32,
+    },
+    ShopItemRewarded {
+        item_name: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BattleRunStepOutcome {
+    pub step: BattleRunStep,
+    pub battle_events: Vec<crate::core::battle::BattleEvent>,
+    pub run_events: Vec<BattleRunEvent>,
+    pub timeline: BattleTimeline,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -146,14 +175,29 @@ impl BattleRunState {
         Ok(())
     }
 
-    pub fn step(&mut self) -> Result<(BattleRunStep, BattleOutcome), BattleRunError> {
+    pub fn step(&mut self) -> Result<BattleRunStepOutcome, BattleRunError> {
         match self.phase {
             BattleRunPhase::Draft => {
                 self.start_battle()?;
-                Ok((BattleRunStep::StartedBattle, BattleOutcome::default()))
+                let step = BattleRunStep::StartedBattle;
+                let timeline = BattleTimeline::from_step(
+                    step.clone(),
+                    None,
+                    self.battle.as_ref(),
+                    &[],
+                    &[],
+                    &self.ability_database,
+                );
+                Ok(BattleRunStepOutcome {
+                    step,
+                    battle_events: Vec::new(),
+                    run_events: Vec::new(),
+                    timeline,
+                })
             }
             BattleRunPhase::Battle => {
-                let mut outcome = self
+                let battle_before = self.battle.clone();
+                let outcome = self
                     .battle
                     .as_mut()
                     .map(BattleState::step_turn)
@@ -165,19 +209,52 @@ impl BattleRunState {
                     .is_some_and(|battle| battle.is_finished)
                 {
                     let winner = self.battle.as_ref().and_then(|battle| battle.winner);
-                    self.resolve_battle(winner, &mut outcome);
-                    Ok((BattleRunStep::BattleResolved { winner }, outcome))
+                    let battle_after = self.battle.clone();
+                    let run_events = self.resolve_battle(winner);
+                    let step = BattleRunStep::BattleResolved { winner };
+                    let timeline = BattleTimeline::from_step(
+                        step.clone(),
+                        battle_before.as_ref(),
+                        battle_after.as_ref(),
+                        &outcome.events,
+                        &run_events,
+                        &self.ability_database,
+                    );
+                    Ok(BattleRunStepOutcome {
+                        step,
+                        battle_events: outcome.events,
+                        run_events,
+                        timeline,
+                    })
                 } else {
-                    Ok((BattleRunStep::AdvancedBattle, outcome))
+                    let step = BattleRunStep::AdvancedBattle;
+                    let timeline = BattleTimeline::from_step(
+                        step.clone(),
+                        battle_before.as_ref(),
+                        self.battle.as_ref(),
+                        &outcome.events,
+                        &[],
+                        &self.ability_database,
+                    );
+                    Ok(BattleRunStepOutcome {
+                        step,
+                        battle_events: outcome.events,
+                        run_events: Vec::new(),
+                        timeline,
+                    })
                 }
             }
-            BattleRunPhase::Complete => {
-                Ok((BattleRunStep::AdvancedBattle, BattleOutcome::default()))
-            }
+            BattleRunPhase::Complete => Ok(BattleRunStepOutcome {
+                step: BattleRunStep::AdvancedBattle,
+                battle_events: Vec::new(),
+                run_events: Vec::new(),
+                timeline: BattleTimeline::default(),
+            }),
         }
     }
 
-    fn resolve_battle(&mut self, winner: Option<TeamSide>, outcome: &mut BattleOutcome) {
+    fn resolve_battle(&mut self, winner: Option<TeamSide>) -> Vec<BattleRunEvent> {
+        let mut run_events = Vec::new();
         let rewards = self
             .current_opponent()
             .map(|opponent| opponent.win_rewards.clone())
@@ -190,10 +267,11 @@ impl BattleRunState {
                 let damage = self.current_opponent_loss_damage();
                 self.losses += 1;
                 self.health = (self.health - damage).max(0);
-                outcome.push_log(format!(
-                    "Run damage: lost {damage} health. Health: {}/{}.",
-                    self.health, self.max_health
-                ));
+                run_events.push(BattleRunEvent::RunHealthLost {
+                    amount: damage,
+                    health_after: self.health,
+                    max_health: self.max_health,
+                });
             }
         }
 
@@ -215,8 +293,10 @@ impl BattleRunState {
         }
 
         if winner == Some(TeamSide::Challenger) {
-            self.apply_win_rewards(&rewards, outcome);
+            run_events.extend(self.apply_win_rewards(&rewards));
         }
+
+        run_events
     }
 
     fn next_shop_offer(&mut self, slot: usize) -> Option<BattleShopItem> {
@@ -278,29 +358,35 @@ impl BattleRunState {
             .unwrap_or(self.loss_health_damage)
     }
 
-    fn apply_win_rewards(&mut self, rewards: &[BattleRunReward], outcome: &mut BattleOutcome) {
+    fn apply_win_rewards(&mut self, rewards: &[BattleRunReward]) -> Vec<BattleRunEvent> {
+        let mut events = Vec::new();
         for reward in rewards {
             match reward {
                 BattleRunReward::AddGold { amount } => {
                     self.draft.gold += amount;
-                    outcome.push_log(format!("Run reward: gained {amount} gold."));
+                    events.push(BattleRunEvent::GoldRewarded {
+                        amount: *amount,
+                        gold_after: self.draft.gold,
+                    });
                 }
                 BattleRunReward::HealRun { amount } => {
                     let before = self.health;
                     self.health = (self.health + amount).clamp(0, self.max_health);
-                    outcome.push_log(format!(
-                        "Run reward: healed {} health. Health: {}/{}.",
-                        self.health - before,
-                        self.health,
-                        self.max_health
-                    ));
+                    events.push(BattleRunEvent::RunHealed {
+                        amount: self.health - before,
+                        health_after: self.health,
+                        max_health: self.max_health,
+                    });
                 }
                 BattleRunReward::AddShopItem { item } => {
                     self.draft.shop.push(item.clone());
-                    outcome.push_log(format!("Run reward: added {} to the shop.", item.name()));
+                    events.push(BattleRunEvent::ShopItemRewarded {
+                        item_name: item.name().to_string(),
+                    });
                 }
             }
         }
+        events
     }
 }
 

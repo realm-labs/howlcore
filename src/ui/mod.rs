@@ -6,10 +6,10 @@ use crate::{
     app_state::AppMode,
     core::{
         battle::{
-            BattleAbilityDatabase, BattleChimera, BattleDefinition, BattleEffect, BattleEvent,
-            BattleLeaderEffect, BattleOutcome, BattleRunPhase, BattleRunReward, BattleRunState,
-            BattleRunStep, BattleShopItem, BattleState, BattleTrigger, PurchaseOutcome, TeamSide,
-            resolver::front_chimera_id,
+            BattleAbilityDatabase, BattleChimera, BattleDefinition, BattleEffect,
+            BattleLeaderEffect, BattleRunPhase, BattleRunReward, BattleRunState, BattleShopItem,
+            BattleState, BattleTimelineFrame, BattleTrigger, BattleViewSnapshot, PurchaseOutcome,
+            TeamSide, resolver::front_chimera_id,
         },
         work::{Chimera, Effect, StageDefinition, TraitDef, Trigger, WorkRunPhase, WorkRunState},
     },
@@ -58,16 +58,10 @@ struct GameplayResource {
 struct UiLogs {
     work: Vec<String>,
     battle: Vec<String>,
-    battle_pending: Vec<BattlePlaybackFrame>,
-    battle_display: Option<BattleState>,
+    battle_pending: Vec<BattleTimelineFrame>,
+    battle_display: Option<BattleViewSnapshot>,
     work_offset: usize,
     battle_offset: usize,
-}
-
-#[derive(Clone)]
-struct BattlePlaybackFrame {
-    line: String,
-    battle: Option<BattleState>,
 }
 
 #[derive(Component)]
@@ -542,23 +536,15 @@ fn advance_active_mode(gameplay: &mut GameplayResource, logs: &mut UiLogs) {
                 return;
             }
 
-            let previous_battle = gameplay.battle.battle.clone();
             let step_result = gameplay.battle.step();
             let was_following = logs.battle_offset == 0;
             match step_result {
-                Ok((step, outcome)) => {
-                    let playback_frames = format_battle_playback_frames(
-                        step,
-                        &outcome,
-                        previous_battle.as_ref(),
-                        gameplay.battle.battle.as_ref(),
-                        &gameplay.battle.ability_database,
-                    );
-                    if playback_frames.is_empty() {
+                Ok(outcome) => {
+                    if outcome.timeline.frames.is_empty() {
                         logs.battle
                             .push("Battle run: no visible event.".to_string());
                     } else {
-                        logs.battle_pending = playback_frames;
+                        logs.battle_pending = outcome.timeline.frames;
                         reveal_next_battle_playback_line(logs);
                     }
                 }
@@ -580,8 +566,8 @@ fn reveal_next_battle_playback_line(logs: &mut UiLogs) -> bool {
 
     let frame = logs.battle_pending.remove(0);
     logs.battle.push(frame.line);
-    if let Some(battle) = frame.battle {
-        logs.battle_display = Some(battle);
+    if let Some(snapshot) = frame.snapshot {
+        logs.battle_display = Some(snapshot);
     }
     logs.battle_offset = 0;
     true
@@ -1026,7 +1012,11 @@ fn spawn_work_board(parent: &mut ChildBuilder, run: &WorkRunState) {
 }
 
 fn spawn_battle_board(parent: &mut ChildBuilder, run: &BattleRunState, logs: &UiLogs) {
-    let display_battle = logs.battle_display.as_ref().or(run.battle.as_ref());
+    let display_battle = logs
+        .battle_display
+        .as_ref()
+        .map(|snapshot| &snapshot.state)
+        .or(run.battle.as_ref());
 
     match (&run.phase, display_battle) {
         (BattleRunPhase::Draft, _) => spawn_battle_draft_board(parent, run),
@@ -1773,220 +1763,6 @@ fn scroll_active_log(gameplay: &GameplayResource, logs: &mut UiLogs, delta: isiz
     }
 }
 
-fn format_battle_run_step(step: BattleRunStep) -> Vec<String> {
-    match step {
-        BattleRunStep::StartedBattle => vec!["Battle run: started battle.".to_string()],
-        BattleRunStep::AdvancedBattle => Vec::new(),
-        BattleRunStep::BattleResolved { winner } => {
-            let result = winner
-                .map(|side| format!("{} wins", side_label(side)))
-                .unwrap_or_else(|| "draw".to_string());
-            vec![format!("Battle run: resolved battle, {result}.")]
-        }
-    }
-}
-
-fn format_battle_playback_frames(
-    step: BattleRunStep,
-    outcome: &BattleOutcome,
-    previous_state: Option<&BattleState>,
-    current_state: Option<&BattleState>,
-    abilities: &BattleAbilityDatabase,
-) -> Vec<BattlePlaybackFrame> {
-    let mut trigger_groups = Vec::<Vec<String>>::new();
-
-    for event in &outcome.events {
-        match event {
-            BattleEvent::AbilityTriggered { source, ability } => {
-                let source_name = previous_state
-                    .and_then(|state| state.chimera(*source))
-                    .or_else(|| current_state.and_then(|state| state.chimera(*source)))
-                    .map(|chimera| chimera.name.as_str())
-                    .unwrap_or("Unknown");
-                let ability_text = abilities
-                    .abilities
-                    .get(ability)
-                    .map(|ability| {
-                        format!(
-                            "{} [{}]",
-                            ability.name,
-                            battle_trigger_label(ability.trigger)
-                        )
-                    })
-                    .unwrap_or_else(|| ability.0.to_string());
-
-                trigger_groups.push(vec![format!(
-                    "Trigger: {} {} -> {}",
-                    side_label(source.side),
-                    source_name,
-                    ability_text
-                )]);
-            }
-            BattleEvent::ChanceRolled {
-                percent,
-                roll,
-                success,
-            } => {
-                if let Some(group) = trigger_groups.last_mut() {
-                    group.push(format!(
-                        "Trigger roll: {percent}% rolled {roll} => {}",
-                        if *success { "success" } else { "miss" }
-                    ));
-                }
-            }
-            _ => {}
-        }
-    }
-
-    let mut frames = format_battle_run_step(step)
-        .into_iter()
-        .map(|line| BattlePlaybackFrame {
-            line,
-            battle: current_state.cloned().or_else(|| previous_state.cloned()),
-        })
-        .collect::<Vec<_>>();
-
-    let mut visual = previous_state.cloned().or_else(|| current_state.cloned());
-    let mut event_index = 0;
-    for line in &outcome.logs {
-        if line.contains(" used ") && !trigger_groups.is_empty() {
-            frames.extend(
-                trigger_groups
-                    .remove(0)
-                    .into_iter()
-                    .map(|line| BattlePlaybackFrame {
-                        line,
-                        battle: visual.clone(),
-                    }),
-            );
-        } else {
-            advance_visual_battle_for_log(
-                &mut visual,
-                &outcome.events,
-                &mut event_index,
-                line,
-                current_state,
-            );
-            frames.push(BattlePlaybackFrame {
-                line: line.clone(),
-                battle: visual.clone(),
-            });
-        }
-    }
-
-    for group in trigger_groups {
-        frames.extend(group.into_iter().map(|line| BattlePlaybackFrame {
-            line,
-            battle: visual.clone(),
-        }));
-    }
-
-    frames
-}
-
-fn advance_visual_battle_for_log(
-    visual: &mut Option<BattleState>,
-    events: &[BattleEvent],
-    event_index: &mut usize,
-    line: &str,
-    current_state: Option<&BattleState>,
-) {
-    let wanted = if line.contains("Turn started") {
-        Some("turn")
-    } else if line.contains(" took ") && line.contains(" damage") {
-        Some("damage")
-    } else if line.contains("restored") {
-        Some("heal")
-    } else if line.contains("attack changed") {
-        Some("attack")
-    } else if line.contains("swapped positions") {
-        Some("swap")
-    } else if line.contains("joined") {
-        Some("summon")
-    } else if line.contains("Battle ended") {
-        Some("end")
-    } else {
-        None
-    };
-
-    let Some(wanted) = wanted else {
-        return;
-    };
-
-    while *event_index < events.len() {
-        let event = &events[*event_index];
-        *event_index += 1;
-        if visual_event_kind(event) == Some(wanted) {
-            apply_visual_battle_event(visual, event, current_state);
-            break;
-        }
-    }
-}
-
-fn visual_event_kind(event: &BattleEvent) -> Option<&'static str> {
-    match event {
-        BattleEvent::TurnStarted { .. } => Some("turn"),
-        BattleEvent::DamageDealt { .. } => Some("damage"),
-        BattleEvent::HpRestored { .. } => Some("heal"),
-        BattleEvent::AttackChanged { .. } => Some("attack"),
-        BattleEvent::PositionSwapped { .. } => Some("swap"),
-        BattleEvent::ChimeraSummoned { .. } => Some("summon"),
-        BattleEvent::BattleEnded { .. } => Some("end"),
-        _ => None,
-    }
-}
-
-fn apply_visual_battle_event(
-    visual: &mut Option<BattleState>,
-    event: &BattleEvent,
-    current_state: Option<&BattleState>,
-) {
-    let Some(state) = visual else {
-        return;
-    };
-
-    match event {
-        BattleEvent::TurnStarted { turn } => state.turn = *turn,
-        BattleEvent::DamageDealt { target, amount } => {
-            if let Some(chimera) = state.chimera_mut(*target) {
-                chimera.stats.hp = (chimera.stats.hp - amount).max(0);
-            }
-        }
-        BattleEvent::HpRestored { target, amount } => {
-            if let Some(chimera) = state.chimera_mut(*target) {
-                chimera.stats.hp = (chimera.stats.hp + amount).min(chimera.stats.max_hp);
-            }
-        }
-        BattleEvent::AttackChanged { target, amount } => {
-            if let Some(chimera) = state.chimera_mut(*target) {
-                chimera.stats.attack = (chimera.stats.attack + amount).max(0);
-            }
-        }
-        BattleEvent::PositionSwapped { first, second } => {
-            if first.side == second.side {
-                let team = state.team_mut(first.side);
-                if first.index < team.chimeras.len() && second.index < team.chimeras.len() {
-                    let first_slot = team.chimeras[first.index].slot;
-                    team.chimeras[first.index].slot = team.chimeras[second.index].slot;
-                    team.chimeras[second.index].slot = first_slot;
-                }
-            }
-        }
-        BattleEvent::ChimeraSummoned { chimera } => {
-            if state.chimera(*chimera).is_none()
-                && let Some(source) = current_state.and_then(|current| current.chimera(*chimera))
-            {
-                state.team_mut(chimera.side).chimeras.push(source.clone());
-            }
-        }
-        BattleEvent::BattleEnded { winner } => {
-            state.is_finished = true;
-            state.winner = *winner;
-        }
-        _ => {}
-    }
-}
-
 fn format_purchase_outcome(outcome: PurchaseOutcome) -> String {
     match outcome {
         PurchaseOutcome::Added { chimera_name } => format!("Draft: bought {chimera_name}."),
@@ -2033,7 +1809,11 @@ fn format_header(gameplay: &GameplayResource, logs: &UiLogs) -> String {
         }
         AppMode::ChimeraBattle => {
             let run = &gameplay.battle;
-            let display_battle = logs.battle_display.as_ref().or(run.battle.as_ref());
+            let display_battle = logs
+                .battle_display
+                .as_ref()
+                .map(|snapshot| &snapshot.state)
+                .or(run.battle.as_ref());
             match (&run.phase, display_battle) {
                 (BattleRunPhase::Battle, Some(state)) => format!(
                     "Chimera Battle - Turn {}/{}{}",
@@ -2073,7 +1853,12 @@ fn format_score_line(gameplay: &GameplayResource, logs: &UiLogs) -> String {
         }
         AppMode::ChimeraBattle => {
             let run = &gameplay.battle;
-            match logs.battle_display.as_ref().or(run.battle.as_ref()) {
+            match logs
+                .battle_display
+                .as_ref()
+                .map(|snapshot| &snapshot.state)
+                .or(run.battle.as_ref())
+            {
                 Some(state) => format_battle_score(state, run),
                 None => format!(
                     "Phase: {:?}    Leader: {}    Health: {}/{}    Gold: {}    Wins: {}    Losses: {}    Battle: {}/{}",
